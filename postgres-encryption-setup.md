@@ -285,78 +285,121 @@ import psycopg2
 import tempfile
 import json
 import os
+import logging
+import time
+import socket
 
-# ── Config — read from Lambda Environment Variables ────────
-S3_BUCKET = os.environ["S3_BUCKET"]           # my-us-east-1-uploads
-S3_KEY    = os.environ["S3_KEY"]              # postgres-certs/ca.crt
-DB_HOST   = os.environ["DB_HOST"]             # EC2 private IP
-DB_PORT   = int(os.environ.get("DB_PORT", "5432"))
-DB_NAME   = os.environ["DB_NAME"]             # yourdb
-DB_USER   = os.environ["DB_USER"]             # youruser
-DB_PASS   = os.environ["DB_PASS"]             # yourpassword
+# ── Logging setup ───────────────────────────────────────────
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
 # ───────────────────────────────────────────────────────────
 
-# ── Cold start — runs once per Lambda instance ─────────────
+# ── Config ─────────────────────────────────────────────────
+S3_BUCKET = "my-bucket-name"
+S3_KEY    = "postgres-certs/ca.crt"
+DB_HOST   = "172.x.x.x"
+DB_PORT   = 5432
+DB_NAME   = "yourdb"
+DB_USER   = "youruser"
+DB_PASS   = "yourpassword"
+# ───────────────────────────────────────────────────────────
+
 def download_ca_cert():
-    s3  = boto3.client("s3")
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
-    s3.download_fileobj(S3_BUCKET, S3_KEY, tmp)
-    tmp.close()
-    return tmp.name
+    logger.info("Downloading ca.crt from S3 bucket=%s key=%s", S3_BUCKET, S3_KEY)
+    try:
+        s3  = boto3.client("s3")
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
+        s3.download_fileobj(S3_BUCKET, S3_KEY, tmp)
+        tmp.close()
+        logger.info("ca.crt downloaded successfully to %s", tmp.name)
+        return tmp.name
+    except Exception as e:
+        logger.error("Failed to download ca.crt: %s", str(e))
+        raise
 
+logger.info("Cold start — downloading ca.crt")
 CA_CERT_PATH = download_ca_cert()
-# ───────────────────────────────────────────────────────────
+logger.info("Cold start complete — CA_CERT_PATH=%s", CA_CERT_PATH)
+
+
+def check_tcp_reachability():
+    """Raw TCP check before even attempting Postgres connection."""
+    logger.info("TCP check — trying to reach %s:%s", DB_HOST, DB_PORT)
+    try:
+        start = time.time()
+        sock  = socket.create_connection((DB_HOST, DB_PORT), timeout=5)
+        sock.close()
+        elapsed = round(time.time() - start, 3)
+        logger.info("TCP check PASSED — connected in %ss", elapsed)
+        return True
+    except socket.timeout:
+        logger.error("TCP check FAILED — timed out after 5s. EC2 security group likely blocking port 5432")
+        return False
+    except ConnectionRefusedError:
+        logger.error("TCP check FAILED — connection refused. Postgres may not be running or port is wrong")
+        return False
+    except Exception as e:
+        logger.error("TCP check FAILED — %s: %s", type(e).__name__, str(e))
+        return False
+
 
 def get_connection():
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS,
-        sslmode="verify-ca",
-        sslrootcert=CA_CERT_PATH,
-        connect_timeout=5
-    )
+    logger.info("Attempting Postgres connection host=%s port=%s dbname=%s user=%s sslmode=verify-ca",
+                DB_HOST, DB_PORT, DB_NAME, DB_USER)
+    start = time.time()
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            sslmode="verify-ca",
+            sslrootcert=CA_CERT_PATH,
+            connect_timeout=10        # fail fast — don't wait 63s
+        )
+        elapsed = round(time.time() - start, 3)
+        logger.info("Postgres connection established in %ss", elapsed)
+        return conn
+    except psycopg2.OperationalError as e:
+        elapsed = round(time.time() - start, 3)
+        logger.error("Postgres connection FAILED after %ss: %s", elapsed, str(e))
+        raise
 
-def handle_query(sql):
-    """Run a SELECT query and return results."""
-    conn   = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(sql)
-    rows   = cursor.fetchall()
-    cols   = [desc[0] for desc in cursor.description]
-    cursor.close()
-    conn.close()
-    return {"columns": cols, "rows": rows}
 
-# ── Lambda entrypoint ───────────────────────────────────────
 def lambda_handler(event, context):
-    """
-    AWS Lambda entrypoint — invoked by AWS for every execution.
+    logger.info("lambda_handler invoked — action=%s", event.get("action", "ping"))
+    logger.info("Remaining time: %sms", context.get_remaining_time_in_millis())
 
-    Supported actions (pass via test event JSON):
-      ping   — checks DB connectivity and confirms SSL is active
-      query  — runs a custom SELECT query (pass 'sql' key in event)
-    """
     action = event.get("action", "ping")
 
     try:
         if action == "ping":
+            # Step 1 — raw TCP check first
+            tcp_ok = check_tcp_reachability()
+            if not tcp_ok:
+                return {
+                    "status":  "error",
+                    "action":  "ping",
+                    "message": "TCP connection to DB_HOST:5432 failed — check EC2 security group inbound rules for port 5432"
+                }
+
+            # Step 2 — Postgres connection + SSL check
             conn   = get_connection()
             cursor = conn.cursor()
 
-            # Confirm SSL is active and get cipher info
+            logger.info("Running SSL status query")
             cursor.execute("""
                 SELECT ssl, version, cipher
                 FROM pg_stat_ssl
                 WHERE pid = pg_backend_pid()
             """)
             ssl_info = cursor.fetchone()
+            logger.info("SSL info: ssl=%s version=%s cipher=%s", *ssl_info)
 
-            # Get Postgres server version
             cursor.execute("SELECT version()")
             pg_version = cursor.fetchone()[0]
+            logger.info("Postgres version: %s", pg_version)
 
             cursor.close()
             conn.close()
@@ -364,51 +407,40 @@ def lambda_handler(event, context):
             return {
                 "status":      "ok",
                 "action":      "ping",
-                "ssl":         ssl_info[0],     # True/False
-                "tls_version": ssl_info[1],     # e.g. TLSv1.3
-                "cipher":      ssl_info[2],     # e.g. TLS_AES_256_GCM_SHA384
+                "ssl":         ssl_info[0],
+                "tls_version": ssl_info[1],
+                "cipher":      ssl_info[2],
                 "pg_version":  pg_version
             }
 
         elif action == "query":
             sql = event.get("sql")
             if not sql:
-                return {
-                    "status":  "error",
-                    "message": "action=query requires a 'sql' field in the event"
-                }
-            # Safety guard — only allow SELECT via console testing
+                return {"status": "error", "message": "action=query requires a 'sql' field"}
             if not sql.strip().upper().startswith("SELECT"):
-                return {
-                    "status":  "error",
-                    "message": "Only SELECT queries are allowed via the test console"
-                }
-            result = handle_query(sql)
-            return {
-                "status":  "ok",
-                "action":  "query",
-                "columns": result["columns"],
-                "rows":    result["rows"]
-            }
+                return {"status": "error", "message": "Only SELECT queries allowed"}
+
+            logger.info("Running query: %s", sql)
+            conn   = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            rows   = cursor.fetchall()
+            cols   = [desc[0] for desc in cursor.description]
+            cursor.close()
+            conn.close()
+            logger.info("Query returned %s rows", len(rows))
+
+            return {"status": "ok", "action": "query", "columns": cols, "rows": rows}
 
         else:
-            return {
-                "status":  "error",
-                "message": f"Unknown action '{action}'. Supported: ping, query"
-            }
+            return {"status": "error", "message": f"Unknown action '{action}'. Use: ping, query"}
 
     except psycopg2.OperationalError as e:
-        return {
-            "status":  "error",
-            "action":  action,
-            "message": str(e)
-        }
+        logger.error("OperationalError: %s", str(e))
+        return {"status": "error", "action": action, "message": str(e)}
     except Exception as e:
-        return {
-            "status":  "error",
-            "action":  action,
-            "message": str(e)
-        }
+        logger.error("Unexpected error: %s: %s", type(e).__name__, str(e))
+        return {"status": "error", "action": action, "message": str(e)}
 ```
 
 #### IAM Policy — Lambda Execution Role
