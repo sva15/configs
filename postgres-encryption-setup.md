@@ -16,7 +16,8 @@
    - [Step 5: Update pg_hba.conf](#step-5--update-pg_hbaconf-allow-both-plain--ssl)
    - [Step 6: Reload Config](#step-6--reload-postgres-config-no-restart-needed)
    - [Step 7: Verify SSL](#step-7--verify-ssl-is-working)
-   - [Step 8: Update Lambda Connection](#step-8--update-lambda-to-use-ssl)
+   - [Step 8: Lambda Code + Console Testing](#step-8--lambda-code--console-testing)
+   - [Step 9: Test from Lambda Console](#step-9--test-from-lambda-console)
 3. [Architecture Summary](#3-architecture-summary)
 4. [Quick Wins & Security Hardening](#4-quick-wins--security-hardening)
 
@@ -257,40 +258,177 @@ Expected when connected via SSL:
 
 ---
 
-### Step 8 — Update Lambda to Use SSL
+### Step 8 — Lambda Code + Console Testing
 
-Upload `ca.crt` to an S3 bucket, then update your Lambda connection code:
+`ca.crt` is already uploaded to `my-us-east-1-uploads/postgres-certs/ca.crt`.  
+Credentials are passed via Lambda environment variables — never hardcoded.
+
+#### Lambda Environment Variables
+
+In Lambda Console → **Configuration → Environment variables**, add:
+
+| Key | Value |
+|---|---|
+| `S3_BUCKET` | `my-us-east-1-uploads` |
+| `S3_KEY` | `postgres-certs/ca.crt` |
+| `DB_HOST` | `<EC2_PRIVATE_IP>` |
+| `DB_PORT` | `5432` |
+| `DB_NAME` | `yourdb` |
+| `DB_USER` | `youruser` |
+| `DB_PASS` | `yourpassword` |
+
+#### Lambda Code (lambda_function.py)
 
 ```python
 import boto3
 import psycopg2
 import tempfile
+import json
 import os
 
-# Download CA cert once at Lambda cold start
-def get_ca_cert():
-    s3 = boto3.client('s3')
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.crt')
-    s3.download_fileobj('your-certs-bucket', 'postgres-ssl/ca.crt', tmp)
+# ── Config — read from Lambda Environment Variables ────────
+S3_BUCKET = os.environ["S3_BUCKET"]           # my-us-east-1-uploads
+S3_KEY    = os.environ["S3_KEY"]              # postgres-certs/ca.crt
+DB_HOST   = os.environ["DB_HOST"]             # EC2 private IP
+DB_PORT   = int(os.environ.get("DB_PORT", "5432"))
+DB_NAME   = os.environ["DB_NAME"]             # yourdb
+DB_USER   = os.environ["DB_USER"]             # youruser
+DB_PASS   = os.environ["DB_PASS"]             # yourpassword
+# ───────────────────────────────────────────────────────────
+
+# ── Cold start — runs once per Lambda instance ─────────────
+def download_ca_cert():
+    s3  = boto3.client("s3")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
+    s3.download_fileobj(S3_BUCKET, S3_KEY, tmp)
     tmp.close()
     return tmp.name
 
-# Runs once per cold start — reused across warm invocations
-CA_CERT_PATH = get_ca_cert()
+CA_CERT_PATH = download_ca_cert()
+# ───────────────────────────────────────────────────────────
 
 def get_connection():
     return psycopg2.connect(
-        host="<EC2_PRIVATE_IP>",
-        port=5432,
-        dbname="yourdb",
-        user="youruser",
-        password="yourpassword",
-        sslmode="verify-ca",        # encrypts + validates the CA cert
-        sslrootcert=CA_CERT_PATH
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASS,
+        sslmode="verify-ca",
+        sslrootcert=CA_CERT_PATH,
+        connect_timeout=5
     )
+
+def handle_query(sql):
+    """Run a SELECT query and return results."""
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(sql)
+    rows   = cursor.fetchall()
+    cols   = [desc[0] for desc in cursor.description]
+    cursor.close()
+    conn.close()
+    return {"columns": cols, "rows": rows}
+
+# ── Lambda entrypoint ───────────────────────────────────────
+def lambda_handler(event, context):
+    """
+    AWS Lambda entrypoint — invoked by AWS for every execution.
+
+    Supported actions (pass via test event JSON):
+      ping   — checks DB connectivity and confirms SSL is active
+      query  — runs a custom SELECT query (pass 'sql' key in event)
+    """
+    action = event.get("action", "ping")
+
+    try:
+        if action == "ping":
+            conn   = get_connection()
+            cursor = conn.cursor()
+
+            # Confirm SSL is active and get cipher info
+            cursor.execute("""
+                SELECT ssl, version, cipher
+                FROM pg_stat_ssl
+                WHERE pid = pg_backend_pid()
+            """)
+            ssl_info = cursor.fetchone()
+
+            # Get Postgres server version
+            cursor.execute("SELECT version()")
+            pg_version = cursor.fetchone()[0]
+
+            cursor.close()
+            conn.close()
+
+            return {
+                "status":      "ok",
+                "action":      "ping",
+                "ssl":         ssl_info[0],     # True/False
+                "tls_version": ssl_info[1],     # e.g. TLSv1.3
+                "cipher":      ssl_info[2],     # e.g. TLS_AES_256_GCM_SHA384
+                "pg_version":  pg_version
+            }
+
+        elif action == "query":
+            sql = event.get("sql")
+            if not sql:
+                return {
+                    "status":  "error",
+                    "message": "action=query requires a 'sql' field in the event"
+                }
+            # Safety guard — only allow SELECT via console testing
+            if not sql.strip().upper().startswith("SELECT"):
+                return {
+                    "status":  "error",
+                    "message": "Only SELECT queries are allowed via the test console"
+                }
+            result = handle_query(sql)
+            return {
+                "status":  "ok",
+                "action":  "query",
+                "columns": result["columns"],
+                "rows":    result["rows"]
+            }
+
+        else:
+            return {
+                "status":  "error",
+                "message": f"Unknown action '{action}'. Supported: ping, query"
+            }
+
+    except psycopg2.OperationalError as e:
+        return {
+            "status":  "error",
+            "action":  action,
+            "message": str(e)
+        }
+    except Exception as e:
+        return {
+            "status":  "error",
+            "action":  action,
+            "message": str(e)
+        }
 ```
 
-**`sslmode` options explained:**
+#### IAM Policy — Lambda Execution Role
+
+Lambda needs permission to read the cert from S3:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::my-us-east-1-uploads/postgres-certs/ca.crt"
+    }
+  ]
+}
+```
+
+#### `sslmode` Options Reference
 
 | sslmode | Encrypts? | Validates CA? | Validates Hostname? | Use When |
 |---|---|---|---|---|
@@ -298,6 +436,59 @@ def get_connection():
 | `require` | ✅ | ❌ | ❌ | Encrypts but no cert check |
 | `verify-ca` | ✅ | ✅ | ❌ | **Recommended minimum for prod** |
 | `verify-full` | ✅ | ✅ | ✅ | Use if CN matches your hostname |
+
+---
+
+### Step 9 — Test from Lambda Console
+
+Go to Lambda Console → your function → **Test** tab → **Create new test event**.
+
+#### Test Event 1: Ping (connectivity + SSL check)
+
+```json
+{
+  "action": "ping"
+}
+```
+
+Expected response:
+```json
+{
+  "status": "ok",
+  "action": "ping",
+  "ssl": true,
+  "tls_version": "TLSv1.3",
+  "cipher": "TLS_AES_256_GCM_SHA384",
+  "pg_version": "PostgreSQL 16.x on x86_64-pc-linux-gnu ..."
+}
+```
+
+#### Test Event 2: Query (run a SELECT)
+
+```json
+{
+  "action": "query",
+  "sql": "SELECT current_database(), current_user, now()"
+}
+```
+
+Expected response:
+```json
+{
+  "status": "ok",
+  "action": "query",
+  "columns": ["current_database", "current_user", "now"],
+  "rows": [["yourdb", "youruser", "2026-03-18T10:00:00"]]
+}
+```
+
+#### How to Run
+
+1. Lambda Console → your function → **Test** tab
+2. Click **Create new test event** → paste either JSON above → save
+3. Click **Test** → check **Execution results** panel for response and logs
+
+> Start with `ping` — it confirms connectivity, SSL is active, and which TLS version and cipher are in use, all in one call.
 
 ---
 
