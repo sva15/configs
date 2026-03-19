@@ -1,56 +1,45 @@
-# PostgreSQL Encryption Setup: In-Transit (TLS) + At-Rest
+# PostgreSQL Security Hardening — EC2 + Docker + Lambda
 
 **Environment:** PostgreSQL running as a Docker container on an EC2 instance  
-**Client:** Python Lambda function connecting via `host:5432` with username/password
+**Client:** Python Lambda function  
+**Project:** InsightGen  
 
 ---
 
 ## Table of Contents
 
-1. [Encryption At Rest](#1-encryption-at-rest)
+1. [Overview](#1-overview)
 2. [Encryption In Transit — TLS/SSL](#2-encryption-in-transit--tlsssl)
    - [Step 1: Generate Self-Signed Certificates on EC2](#step-1--generate-self-signed-certificates-on-ec2)
-   - [Step 2: Fix Permissions](#step-2--fix-permissions-critical)
-   - [Step 3: Copy Certs into the Running Container](#step-3--copy-certs-into-the-running-container)
-   - [Step 4: Update postgresql.conf](#step-4--update-postgresqlconf-inside-the-container)
-   - [Step 5: Update pg_hba.conf](#step-5--update-pg_hbaconf-allow-both-plain--ssl)
-   - [Step 6: Reload Config](#step-6--reload-postgres-config-no-restart-needed)
-   - [Step 7: Verify SSL](#step-7--verify-ssl-is-working)
-   - [Step 8: Lambda Code + Console Testing](#step-8--lambda-code--console-testing)
-   - [Step 9: Test from Lambda Console](#step-9--test-from-lambda-console)
-3. [Architecture Summary](#3-architecture-summary)
-4. [Quick Wins & Security Hardening](#4-quick-wins--security-hardening)
+   - [Step 2: Fix Certificate Permissions](#step-2--fix-certificate-permissions)
+   - [Step 3: Deploy Certificates into PostgreSQL Container](#step-3--deploy-certificates-into-postgresql-container)
+   - [Step 4: Enable SSL in postgresql.conf](#step-4--enable-ssl-in-postgresqlconf)
+   - [Step 5: Configure pg_hba.conf](#step-5--configure-pg_hbaconf)
+   - [Step 6: Reload PostgreSQL Configuration](#step-6--reload-postgresql-configuration)
+   - [Step 7: Verify SSL is Active](#step-7--verify-ssl-is-active)
+3. [Encryption At Rest — EBS Volume](#3-encryption-at-rest--ebs-volume)
+4. [Secrets Management — AWS Parameter Store](#4-secrets-management--aws-parameter-store)
+   - [Step 1: Create Dedicated KMS Key](#step-1--create-a-dedicated-kms-key)
+   - [Step 2: Create KMS Key Policy](#step-2--create-kms-key-policy)
+   - [Step 3: Store Parameters as SecureString](#step-3--store-parameters-as-securestring)
+   - [Step 4: Lambda IAM Role Policy](#step-4--lambda-iam-role-policy)
+   - [Step 5: Lambda Code](#step-5--lambda-code)
+   - [Step 6: Verify Access Control](#step-6--verify-access-control)
+5. [Validate End-to-End Encryption](#5-validate-end-to-end-encryption)
+6. [Architecture Summary](#6-architecture-summary)
+7. [Pending Tasks](#7-pending-tasks)
 
 ---
 
-## 1. Encryption At Rest
+## 1. Overview
 
-### EBS Volume Encryption
-
-Your EBS volume is already encrypted — **this is sufficient** for the at-rest requirement.
-
-**What EBS encryption covers:**
-- All PostgreSQL data files written to disk (AES-256 via KMS)
-- WAL (Write-Ahead Log) files
-- Temp files and buffers flushed to disk
-- EBS snapshots are also encrypted automatically
-- Zero application changes required — fully transparent
-
-**Compliance:** Satisfies most frameworks (SOC2, PCI-DSS, HIPAA) for encryption at rest.
-
-### Do You Also Need pgcrypto (Field-Level Encryption)?
-
-Only add PostgreSQL-level encryption on top of EBS if you have specific threat models:
-
-| Scenario | Need pgcrypto? |
-|---|---|
-| General "encrypt data at rest" compliance requirement | ❌ EBS is enough |
-| Protection from someone stealing the physical disk | ❌ EBS is enough |
-| AWS insider threat accessing your EBS snapshot directly | ✅ Yes |
-| Postgres superuser must NOT see specific columns (SSN, PII) | ✅ Yes |
-| Regulatory requirement for **field-level** encryption specifically | ✅ Yes |
-
-**For your setup** (Lambda → Postgres on EC2), EBS encryption alone is the right call. pgcrypto adds complexity — key management in app code, slower queries, harder to index — that isn't justified without a specific field-level requirement.
+| Requirement | Approach | Status |
+|---|---|---|
+| Encryption in transit | TLS/SSL on PostgreSQL container | ✅ Done |
+| Encryption at rest | EBS volume encryption via KMS | 🔄 Pending |
+| Secrets management | AWS SSM Parameter Store (SecureString + KMS) | ✅ Done |
+| Connection validation | `sslmode=require` — encrypted, no cert validation | ✅ Done |
+| Cert-based validation | `sslmode=verify-ca` — upgrade pending cert mismatch fix | ⏳ Pending |
 
 ---
 
@@ -58,37 +47,37 @@ Only add PostgreSQL-level encryption on top of EBS if you have specific threat m
 
 ### Goal
 
-- ✅ Keep existing username/password connections working (plain TCP)
-- ✅ Also allow SSL/TLS encrypted connections
-- Both modes coexist — no existing connections break
+- Encrypt all traffic between Lambda and PostgreSQL
+- Keep existing username/password authentication
+- Both plain and SSL connections supported during transition period
 
-> **Note:** "SSL" and "TLS" are used interchangeably in PostgreSQL documentation. Modern PostgreSQL uses TLS 1.2+ under the hood. This is different from SSH (which is for server logins).
+> **Note:** PostgreSQL uses TLS under the hood. "SSL" and "TLS" are used interchangeably in PostgreSQL documentation. This is unrelated to SSH.
 
 ---
 
 ### Step 1 — Generate Self-Signed Certificates on EC2
 
-SSH into your EC2 instance and run:
+SSH into the EC2 instance and run:
 
 ```bash
 mkdir -p ~/postgres-ssl && cd ~/postgres-ssl
 
-# 1. Generate CA private key
+# Generate CA private key
 openssl genrsa -out ca.key 4096
 
-# 2. Generate CA self-signed certificate (valid 10 years)
+# Generate CA self-signed certificate (valid 10 years)
 openssl req -new -x509 -days 3650 -key ca.key -out ca.crt \
   -subj "/CN=postgres-ca"
 
-# 3. Generate server private key
+# Generate server private key
 openssl genrsa -out server.key 4096
 
-# 4. Generate server Certificate Signing Request (CSR)
-#    Replace <EC2_PRIVATE_IP> with your actual EC2 private IP
+# Generate server Certificate Signing Request
+# Replace <EC2_PRIVATE_IP> with your actual EC2 private IP
 openssl req -new -key server.key -out server.csr \
   -subj "/CN=<EC2_PRIVATE_IP>"
 
-# 5. Sign the server cert with your CA
+# Sign the server cert with the CA
 openssl x509 -req -days 3650 \
   -in server.csr \
   -CA ca.crt -CAkey ca.key -CAcreateserial \
@@ -101,20 +90,20 @@ ls -la ~/postgres-ssl/
 
 ---
 
-### Step 2 — Fix Permissions (Critical)
+### Step 2 — Fix Certificate Permissions
 
-PostgreSQL will **refuse to start** if key file permissions are too open.
+PostgreSQL will refuse to start if the private key permissions are too open.
 
 ```bash
 # PostgreSQL container runs as UID 999
 chmod 600 server.key          # private key — owner read only
-chmod 644 server.crt ca.crt   # certs — world readable is fine
+chmod 644 server.crt ca.crt   # certificates — world readable is fine
 chown 999:999 server.key server.crt ca.crt
 ```
 
 ---
 
-### Step 3 — Copy Certs into the Running Container
+### Step 3 — Deploy Certificates into PostgreSQL Container
 
 ```bash
 # Find your container name
@@ -144,7 +133,7 @@ docker exec -it <container_name> ls -la \
 
 ---
 
-### Step 4 — Update postgresql.conf Inside the Container
+### Step 4 — Enable SSL in postgresql.conf
 
 ```bash
 # Open a shell inside the container
@@ -172,50 +161,48 @@ exit
 
 ---
 
-### Step 5 — Update pg_hba.conf (Allow Both Plain + SSL)
+### Step 5 — Configure pg_hba.conf
 
 ```bash
 docker exec -it <container_name> bash
 
-# View current rules first to avoid duplicating host lines
+# View current rules before editing
 cat /var/lib/postgresql/data/pg_hba.conf
 
-# Append both rules
+# Append both SSL and plain connection rules
 cat >> /var/lib/postgresql/data/pg_hba.conf << 'EOF'
 
-# Allow SSL (encrypted) connections with password
+# Allow SSL (encrypted) connections
 hostssl   all   all   0.0.0.0/0   scram-sha-256
 
-# Allow plain (unencrypted) connections with password — preserves existing behavior
+# Allow plain (unencrypted) connections — preserved during transition
 host      all   all   0.0.0.0/0   scram-sha-256
 EOF
 
 exit
 ```
 
-> **Note:** If `host` lines already exist in pg_hba.conf, just add the `hostssl` line above them — don't duplicate the `host` rule.
+> **Note:** Once `sslmode=verify-ca` is confirmed working, remove the `host` line to enforce SSL-only connections.
 
 **pg_hba.conf Rule Reference:**
 
-| Rule type | Meaning |
+| Rule | Meaning |
 |---|---|
-| `hostssl` | Only accepts SSL/TLS encrypted connections |
-| `host` | Accepts both plain and SSL connections |
-| `hostnossl` | Only accepts plain (unencrypted) connections |
-
-To **enforce SSL-only** later (after confirming everything works), remove the `host` line and keep only `hostssl`.
+| `hostssl` | SSL/TLS connections only |
+| `host` | Both plain and SSL connections |
+| `hostnossl` | Plain connections only |
 
 ---
 
-### Step 6 — Reload Postgres Config (No Restart Needed)
+### Step 6 — Reload PostgreSQL Configuration
 
 ```bash
-# Reload without dropping existing connections
+# Reload config — no downtime, no dropped connections
 docker exec -it <container_name> psql -U postgres -c "SELECT pg_reload_conf();"
 
 # Confirm SSL is active
 docker exec -it <container_name> psql -U postgres -c "SHOW ssl;"
-# Expected output:
+# Expected:
 #  ssl
 # -----
 #  on
@@ -223,32 +210,21 @@ docker exec -it <container_name> psql -U postgres -c "SHOW ssl;"
 
 ---
 
-### Step 7 — Verify SSL is Working
-
-**Test SSL connection (from EC2 or any machine with ca.crt):**
+### Step 7 — Verify SSL is Active
 
 ```bash
-psql "host=<EC2_IP> port=5432 dbname=yourdb user=youruser \
-      sslmode=verify-ca sslrootcert=~/postgres-ssl/ca.crt" \
-      --password
+# Test SSL connection from EC2
+psql "host=<EC2_PRIVATE_IP> port=5432 dbname=yourdb \
+      user=youruser sslmode=require" --password
+
+# Check SSL status inside an active session
+psql -U postgres -c "
+  SELECT ssl, version, cipher, bits
+  FROM pg_stat_ssl
+  WHERE pid = pg_backend_pid();"
 ```
 
-**Test plain connection (existing behavior still works):**
-
-```bash
-psql "host=<EC2_IP> port=5432 dbname=yourdb user=youruser sslmode=disable" \
-      --password
-```
-
-**Check SSL status from inside an active session:**
-
-```sql
-SELECT ssl, version, cipher, bits
-FROM pg_stat_ssl
-WHERE pid = pg_backend_pid();
-```
-
-Expected when connected via SSL:
+Expected output:
 
 ```
  ssl | version |         cipher         | bits
@@ -258,158 +234,347 @@ Expected when connected via SSL:
 
 ---
 
-### Step 8 — Lambda Code + Console Testing
+## 3. Encryption At Rest — EBS Volume
 
-`ca.crt` is already uploaded to `my-us-east-1-uploads/postgres-certs/ca.crt`.  
-Credentials are passed via Lambda environment variables — never hardcoded.
+### Current State
 
-#### Lambda Environment Variables
+EBS volume attached to EC2 is **unencrypted**. Encryption cannot be enabled in-place — migration via snapshot is required with planned downtime.
 
-In Lambda Console → **Configuration → Environment variables**, add:
+### What EBS Encryption Covers
 
-| Key | Value |
-|---|---|
-| `S3_BUCKET` | `my-us-east-1-uploads` |
-| `S3_KEY` | `postgres-certs/ca.crt` |
-| `DB_HOST` | `<EC2_PRIVATE_IP>` |
-| `DB_PORT` | `5432` |
-| `DB_NAME` | `yourdb` |
-| `DB_USER` | `youruser` |
-| `DB_PASS` | `yourpassword` |
+- All PostgreSQL data files on disk (AES-256 via KMS)
+- WAL (Write-Ahead Log) files
+- Temp files and buffers flushed to disk
+- EBS snapshots encrypted automatically
+- Fully transparent to PostgreSQL and Docker — zero application changes needed
 
-#### Lambda Code (lambda_function.py)
+### Migration Steps
+
+**Estimated downtime: 5–15 minutes**
+
+```bash
+# Step 1 — Stop EC2 instance
+aws ec2 stop-instances --instance-ids i-xxxxxxxxxxxxxxxxx
+
+# Step 2 — Get current volume ID
+aws ec2 describe-instances --instance-ids i-xxxxxxxxxxxxxxxxx \
+  --query "Reservations[].Instances[].BlockDeviceMappings[].Ebs.VolumeId"
+
+# Step 3 — Snapshot current unencrypted volume
+aws ec2 create-snapshot \
+  --volume-id vol-xxxxxxxxxxxxxxxxx \
+  --description "pre-encryption-backup-$(date +%Y%m%d)"
+
+# Wait until snapshot state = "completed"
+aws ec2 describe-snapshots --snapshot-ids snap-xxxxxxxxxxxxxxxxx \
+  --query "Snapshots[].State"
+
+# Step 4 — Copy snapshot with encryption enabled
+aws ec2 copy-snapshot \
+  --source-region us-east-1 \
+  --source-snapshot-id snap-xxxxxxxxxxxxxxxxx \
+  --encrypted \
+  --kms-key-id alias/aws/ebs \
+  --description "insightgen-postgres-encrypted"
+
+# Wait until encrypted snapshot state = "completed"
+aws ec2 describe-snapshots --snapshot-ids snap-yyyyyyyyyyyyyyyyy \
+  --query "Snapshots[].State"
+
+# Step 5 — Create new encrypted volume from snapshot
+aws ec2 create-volume \
+  --snapshot-id snap-yyyyyyyyyyyyyyyyy \
+  --availability-zone us-east-1a \
+  --volume-type gp3 \
+  --encrypted
+
+# Step 6 — Swap volumes
+aws ec2 detach-volume --volume-id vol-xxxxxxxxxxxxxxxxx
+aws ec2 attach-volume \
+  --volume-id vol-yyyyyyyyyyyyyyyyy \
+  --instance-id i-xxxxxxxxxxxxxxxxx \
+  --device /dev/xvda
+
+# Step 7 — Start EC2 instance
+aws ec2 start-instances --instance-ids i-xxxxxxxxxxxxxxxxx
+
+# Step 8 — Verify encryption
+aws ec2 describe-volumes --volume-ids vol-yyyyyyyyyyyyyyyyy \
+  --query "Volumes[].Encrypted"
+# Must return: true
+```
+
+> **Important:** Retain the old unencrypted volume for at least one week before deleting — use as a rollback safety net.
+
+---
+
+## 4. Secrets Management — AWS Parameter Store
+
+### Why Parameter Store
+
+| | Secrets Manager | Parameter Store |
+|---|---|---|
+| Cost | ~$0.40/secret/month | **Free** (Standard tier) |
+| Automatic rotation | ✅ Built-in | ❌ Manual |
+| Encryption | ✅ KMS | ✅ KMS (SecureString) |
+| Best for | Auto-rotating secrets | Config + credentials |
+
+Parameter Store is used here — free, KMS-encrypted, sufficient without auto-rotation. All parameters stored as `SecureString` per security policy — including host, port, and dbname.
+
+---
+
+### Step 1 — Create a Dedicated KMS Key
+
+A dedicated key gives full control over who can encrypt and decrypt. Do not use the default AWS managed key.
+
+```bash
+# Create the key
+aws kms create-key \
+  --description "InsightGen PostgreSQL credentials encryption key"
+
+# Note the KeyId returned: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+# Create a friendly alias
+aws kms create-alias \
+  --alias-name alias/insightgen-postgres-credentials \
+  --target-key-id <KeyId>
+```
+
+---
+
+### Step 2 — Create KMS Key Policy
+
+Controls who can **administer** the key and who can **decrypt** using it. These are intentionally separated — KMS admins cannot decrypt credentials.
+
+Save as `kms-policy.json`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "KeyAdministration",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::<account-id>:user/admin-user-1",
+          "arn:aws:iam::<account-id>:user/admin-user-2"
+        ]
+      },
+      "Action": [
+        "kms:Create*",
+        "kms:Describe*",
+        "kms:Enable*",
+        "kms:List*",
+        "kms:Put*",
+        "kms:Update*",
+        "kms:Revoke*",
+        "kms:Disable*",
+        "kms:Delete*",
+        "kms:ScheduleKeyDeletion",
+        "kms:CancelKeyDeletion"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LambdaDecryptAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<account-id>:role/your-lambda-execution-role"
+      },
+      "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AuthorizedUsersDecryptAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::<account-id>:user/dev-user-1",
+          "arn:aws:iam::<account-id>:user/dev-user-2"
+        ]
+      },
+      "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+Apply the policy:
+
+```bash
+aws kms put-key-policy \
+  --key-id alias/insightgen-postgres-credentials \
+  --policy-name default \
+  --policy file://kms-policy.json
+```
+
+**Access control summary:**
+
+| Who | Can Read SSM? | Can Decrypt? |
+|---|---|---|
+| Lambda execution role | ✅ Yes | ✅ Yes |
+| Authorized IAM users | ✅ Yes | ✅ Yes |
+| KMS admins | ✅ Yes | ❌ No |
+| Everyone else | ❌ No | ❌ No |
+
+---
+
+### Step 3 — Store Parameters as SecureString
+
+All values stored under `/insightgen/postgres/` and encrypted using the dedicated KMS key:
+
+```bash
+aws ssm put-parameter \
+  --name "/insightgen/postgres/host" \
+  --value "172.x.x.x" \
+  --type SecureString \
+  --key-id alias/insightgen-postgres-credentials
+
+aws ssm put-parameter \
+  --name "/insightgen/postgres/port" \
+  --value "5432" \
+  --type SecureString \
+  --key-id alias/insightgen-postgres-credentials
+
+aws ssm put-parameter \
+  --name "/insightgen/postgres/dbname" \
+  --value "yourdb" \
+  --type SecureString \
+  --key-id alias/insightgen-postgres-credentials
+
+aws ssm put-parameter \
+  --name "/insightgen/postgres/username" \
+  --value "youruser" \
+  --type SecureString \
+  --key-id alias/insightgen-postgres-credentials
+
+aws ssm put-parameter \
+  --name "/insightgen/postgres/password" \
+  --value "yourpassword" \
+  --type SecureString \
+  --key-id alias/insightgen-postgres-credentials
+```
+
+---
+
+### Step 4 — Lambda IAM Role Policy
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SSMReadAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": "arn:aws:ssm:us-east-1:<account-id>:parameter/insightgen/postgres/*"
+    },
+    {
+      "Sid": "KMSDecryptAccess",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:<account-id>:key/<KeyId>"
+    }
+  ]
+}
+```
+
+---
+
+### Step 5 — Lambda Code
+
+Credentials are fetched from Parameter Store at cold start. No hardcoded values. `sslmode=require` encrypts all traffic without requiring a CA certificate file.
 
 ```python
 import boto3
 import psycopg2
-import tempfile
-import json
-import os
 import logging
-import time
-import socket
 
-# ── Logging setup ───────────────────────────────────────────
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-# ───────────────────────────────────────────────────────────
+logger.setLevel(logging.INFO)
 
-# ── Config ─────────────────────────────────────────────────
-S3_BUCKET = "my-bucket-name"
-S3_KEY    = "postgres-certs/ca.crt"
-DB_HOST   = "172.x.x.x"
-DB_PORT   = 5432
-DB_NAME   = "yourdb"
-DB_USER   = "youruser"
-DB_PASS   = "yourpassword"
-# ───────────────────────────────────────────────────────────
+SSM_REGION = "us-east-1"
 
-def download_ca_cert():
-    logger.info("Downloading ca.crt from S3 bucket=%s key=%s", S3_BUCKET, S3_KEY)
-    try:
-        s3  = boto3.client("s3")
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
-        s3.download_fileobj(S3_BUCKET, S3_KEY, tmp)
-        tmp.close()
-        logger.info("ca.crt downloaded successfully to %s", tmp.name)
-        return tmp.name
-    except Exception as e:
-        logger.error("Failed to download ca.crt: %s", str(e))
-        raise
+def get_db_config():
+    """Fetch all DB config from SSM Parameter Store at cold start."""
+    logger.info("Fetching DB config from SSM Parameter Store")
+    ssm    = boto3.client("ssm", region_name=SSM_REGION)
+    params = ssm.get_parameters(
+        Names=[
+            "/insightgen/postgres/host",
+            "/insightgen/postgres/port",
+            "/insightgen/postgres/dbname",
+            "/insightgen/postgres/username",
+            "/insightgen/postgres/password"
+        ],
+        WithDecryption=True
+    )
+    config = {p["Name"].split("/")[-1]: p["Value"] for p in params["Parameters"]}
+    logger.info("DB config loaded: host=%s port=%s dbname=%s username=%s",
+        config["host"], config["port"], config["dbname"], config["username"]
+        # password intentionally not logged
+    )
+    return config
 
-logger.info("Cold start — downloading ca.crt")
-CA_CERT_PATH = download_ca_cert()
-logger.info("Cold start complete — CA_CERT_PATH=%s", CA_CERT_PATH)
-
-
-def check_tcp_reachability():
-    """Raw TCP check before even attempting Postgres connection."""
-    logger.info("TCP check — trying to reach %s:%s", DB_HOST, DB_PORT)
-    try:
-        start = time.time()
-        sock  = socket.create_connection((DB_HOST, DB_PORT), timeout=5)
-        sock.close()
-        elapsed = round(time.time() - start, 3)
-        logger.info("TCP check PASSED — connected in %ss", elapsed)
-        return True
-    except socket.timeout:
-        logger.error("TCP check FAILED — timed out after 5s. EC2 security group likely blocking port 5432")
-        return False
-    except ConnectionRefusedError:
-        logger.error("TCP check FAILED — connection refused. Postgres may not be running or port is wrong")
-        return False
-    except Exception as e:
-        logger.error("TCP check FAILED — %s: %s", type(e).__name__, str(e))
-        return False
-
+# Runs once at cold start — reused across warm invocations
+DB_CONFIG = get_db_config()
 
 def get_connection():
-    logger.info("Attempting Postgres connection host=%s port=%s dbname=%s user=%s sslmode=verify-ca",
-                DB_HOST, DB_PORT, DB_NAME, DB_USER)
-    start = time.time()
-    try:
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS,
-            sslmode="verify-ca",
-            sslrootcert=CA_CERT_PATH,
-            connect_timeout=10        # fail fast — don't wait 63s
-        )
-        elapsed = round(time.time() - start, 3)
-        logger.info("Postgres connection established in %ss", elapsed)
-        return conn
-    except psycopg2.OperationalError as e:
-        elapsed = round(time.time() - start, 3)
-        logger.error("Postgres connection FAILED after %ss: %s", elapsed, str(e))
-        raise
-
+    return psycopg2.connect(
+        host=DB_CONFIG["host"],
+        port=int(DB_CONFIG["port"]),
+        dbname=DB_CONFIG["dbname"],
+        user=DB_CONFIG["username"],
+        password=DB_CONFIG["password"],
+        sslmode="require",      # traffic encrypted, no CA cert validation
+        connect_timeout=10
+    )
 
 def lambda_handler(event, context):
-    logger.info("lambda_handler invoked — action=%s", event.get("action", "ping"))
-    logger.info("Remaining time: %sms", context.get_remaining_time_in_millis())
+    """
+    Lambda entrypoint.
 
+    Test actions:
+      ping   — verifies connectivity and confirms SSL is active
+      query  — runs a SELECT query (pass 'sql' key in event)
+    """
     action = event.get("action", "ping")
 
     try:
         if action == "ping":
-            # Step 1 — raw TCP check first
-            tcp_ok = check_tcp_reachability()
-            if not tcp_ok:
-                return {
-                    "status":  "error",
-                    "action":  "ping",
-                    "message": "TCP connection to DB_HOST:5432 failed — check EC2 security group inbound rules for port 5432"
-                }
-
-            # Step 2 — Postgres connection + SSL check
             conn   = get_connection()
             cursor = conn.cursor()
-
-            logger.info("Running SSL status query")
             cursor.execute("""
-                SELECT ssl, version, cipher
+                SELECT ssl, version, cipher, bits
                 FROM pg_stat_ssl
                 WHERE pid = pg_backend_pid()
             """)
             ssl_info = cursor.fetchone()
-            logger.info("SSL info: ssl=%s version=%s cipher=%s", *ssl_info)
-
             cursor.execute("SELECT version()")
             pg_version = cursor.fetchone()[0]
-            logger.info("Postgres version: %s", pg_version)
-
             cursor.close()
             conn.close()
-
             return {
                 "status":      "ok",
                 "action":      "ping",
                 "ssl":         ssl_info[0],
                 "tls_version": ssl_info[1],
                 "cipher":      ssl_info[2],
+                "bits":        ssl_info[3],
                 "pg_version":  pg_version
             }
 
@@ -419,71 +584,34 @@ def lambda_handler(event, context):
                 return {"status": "error", "message": "action=query requires a 'sql' field"}
             if not sql.strip().upper().startswith("SELECT"):
                 return {"status": "error", "message": "Only SELECT queries allowed"}
-
-            logger.info("Running query: %s", sql)
             conn   = get_connection()
             cursor = conn.cursor()
             cursor.execute(sql)
-            rows   = cursor.fetchall()
-            cols   = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            cols = [desc[0] for desc in cursor.description]
             cursor.close()
             conn.close()
-            logger.info("Query returned %s rows", len(rows))
-
             return {"status": "ok", "action": "query", "columns": cols, "rows": rows}
 
         else:
             return {"status": "error", "message": f"Unknown action '{action}'. Use: ping, query"}
 
     except psycopg2.OperationalError as e:
-        logger.error("OperationalError: %s", str(e))
+        logger.error("DB connection error: %s", str(e))
         return {"status": "error", "action": action, "message": str(e)}
     except Exception as e:
-        logger.error("Unexpected error: %s: %s", type(e).__name__, str(e))
+        logger.error("Unexpected error: %s", str(e))
         return {"status": "error", "action": action, "message": str(e)}
 ```
 
-#### IAM Policy — Lambda Execution Role
+**Test events for Lambda Console — Test tab:**
 
-Lambda needs permission to read the cert from S3:
-
+Ping:
 ```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::my-us-east-1-uploads/postgres-certs/ca.crt"
-    }
-  ]
-}
+{ "action": "ping" }
 ```
 
-#### `sslmode` Options Reference
-
-| sslmode | Encrypts? | Validates CA? | Validates Hostname? | Use When |
-|---|---|---|---|---|
-| `disable` | ❌ | ❌ | ❌ | Local dev only |
-| `require` | ✅ | ❌ | ❌ | Encrypts but no cert check |
-| `verify-ca` | ✅ | ✅ | ❌ | **Recommended minimum for prod** |
-| `verify-full` | ✅ | ✅ | ✅ | Use if CN matches your hostname |
-
----
-
-### Step 9 — Test from Lambda Console
-
-Go to Lambda Console → your function → **Test** tab → **Create new test event**.
-
-#### Test Event 1: Ping (connectivity + SSL check)
-
-```json
-{
-  "action": "ping"
-}
-```
-
-Expected response:
+Expected ping response:
 ```json
 {
   "status": "ok",
@@ -491,12 +619,12 @@ Expected response:
   "ssl": true,
   "tls_version": "TLSv1.3",
   "cipher": "TLS_AES_256_GCM_SHA384",
-  "pg_version": "PostgreSQL 16.x on x86_64-pc-linux-gnu ..."
+  "bits": 256,
+  "pg_version": "PostgreSQL 16.x ..."
 }
 ```
 
-#### Test Event 2: Query (run a SELECT)
-
+Query:
 ```json
 {
   "action": "query",
@@ -504,70 +632,135 @@ Expected response:
 }
 ```
 
-Expected response:
+---
+
+### Step 6 — Verify Access Control
+
+```bash
+# Confirm Lambda role can decrypt
+aws ssm get-parameter \
+  --name "/insightgen/postgres/password" \
+  --with-decryption \
+  --profile lambda-role-profile
+# Should return the decrypted value
+
+# Confirm unauthorized users cannot decrypt
+aws ssm get-parameter \
+  --name "/insightgen/postgres/password" \
+  --with-decryption \
+  --profile unauthorized-user
+# Should return: AccessDeniedException
+```
+
+**To rotate credentials — no Lambda redeploy needed:**
+
+```bash
+aws ssm put-parameter \
+  --name "/insightgen/postgres/password" \
+  --value "newpassword" \
+  --type SecureString \
+  --key-id alias/insightgen-postgres-credentials \
+  --overwrite
+```
+
+---
+
+## 5. Validate End-to-End Encryption
+
+### Confirmed Result from Lambda Ping Test
+
 ```json
 {
-  "status": "ok",
-  "action": "query",
-  "columns": ["current_database", "current_user", "now"],
-  "rows": [["yourdb", "youruser", "2026-03-18T10:00:00"]]
+  "ssl": true,
+  "tls_version": "TLSv1.3",
+  "cipher": "TLS_AES_256_GCM_SHA384",
+  "bits": 256
 }
 ```
 
-#### How to Run
+- `ssl: true` — connection is encrypted
+- `TLSv1.3` — latest and most secure TLS version
+- `TLS_AES_256_GCM_SHA384` — AES-256 bit encryption, same standard used by banks and major SaaS products
 
-1. Lambda Console → your function → **Test** tab
-2. Click **Create new test event** → paste either JSON above → save
-3. Click **Test** → check **Execution results** panel for response and logs
+### Verify Active Connections from EC2
 
-> Start with `ping` — it confirms connectivity, SSL is active, and which TLS version and cipher are in use, all in one call.
+```bash
+docker exec -it <container_name> psql -U postgres -c "
+  SELECT pid, ssl, version, cipher, client_addr
+  FROM pg_stat_ssl;"
+# ssl=t on all Lambda connections confirms encrypted traffic
+```
+
+### sslmode Reference
+
+| sslmode | Encrypts? | Validates CA? | Status |
+|---|---|---|---|
+| `disable` | ❌ | ❌ | Not used |
+| `require` | ✅ | ❌ | **Current — working** |
+| `verify-ca` | ✅ | ✅ | Pending — cert mismatch fix required |
+| `verify-full` | ✅ | ✅ | Future consideration |
 
 ---
 
-## 3. Architecture Summary
+## 6. Architecture Summary
 
 ```
 Lambda (Python / psycopg2)
+  ├─ DB credentials  → SSM Parameter Store (/insightgen/postgres/*)
+  │                    SecureString encrypted via dedicated KMS key
+  │                    (alias/insightgen-postgres-credentials)
   │
-  │  sslmode=verify-ca
-  │  ca.crt downloaded from S3 at cold start
+  └─ DB connection   → sslmode=require (TLSv1.3 / AES-256-GCM-SHA384)
   │
   ▼
 EC2 Security Group
-  └─ Port 5432 open to Lambda Security Group only (not 0.0.0.0/0)
+  └─ Port 5432 — Lambda Security Group only
   │
   ▼
 Docker → PostgreSQL Container
-  ├─ ssl=on in postgresql.conf
-  ├─ hostssl rule in pg_hba.conf
-  └─ server.crt / server.key / ca.crt mounted at /var/lib/postgresql/
+  ├─ ssl=on (postgresql.conf)
+  ├─ TLSv1.2 minimum enforced
+  ├─ hostssl + host rules (pg_hba.conf)
+  └─ Certificates at /var/lib/postgresql/
   │
   ▼
-EBS Volume (AES-256 encrypted via AWS KMS)
-  └─ All data files, WAL logs, temp files encrypted at rest
+EBS Volume
+  └─ ⚠️ Encryption pending — migration scheduled
 ```
 
-**Connection modes after setup:**
+---
 
-| Connection Type | pg_hba.conf Rule | Lambda sslmode |
-|---|---|---|
-| Encrypted (SSL) | `hostssl` | `verify-ca` |
-| Plain (existing, preserved) | `host` | `disable` or `prefer` |
+## 7. Pending Tasks
+
+**SEC-005 — Enable KMS Encryption on EC2 EBS Data Volume**
+- Schedule maintenance window — 5 to 15 minutes downtime required
+- Follow migration steps in Section 3
+- Verify `Encrypted=true` on new volume after swap
+- Retain old volume for one week before deletion
+
+**SEC-006 — Enforce Certificate-Based TLS Validation**
+- Identify which certificate PostgreSQL is currently serving using `SHOW ssl_cert_file`
+- Confirm PostgreSQL is using the correct certificates from `~/postgres-ssl/`
+- Upgrade Lambda `sslmode` from `require` to `verify-ca`
+- Revalidate using Lambda ping test — confirm `ssl=true` with cert validation passing
+
+**SEC-007 — Remove Plain Connection Support**
+- Once `verify-ca` is confirmed working, remove the `host` rule from `pg_hba.conf`
+- Retain `hostssl` only to enforce SSL-only connections
+
+**SEC-008 — Security Group Hardening**
+- Confirm EC2 inbound port 5432 is restricted to Lambda security group ID only
+- Remove any broad CIDR-based inbound rules
+
+**SEC-009 — Enable Audit Logging**
+- Enable VPC Flow Logs on Lambda and EC2 subnets
+- Enable CloudTrail for API and connection activity audit trail
+
+**SEC-010 — Certificate Expiry Monitoring**
+- Document certificate expiry dates (current certs valid for 3650 days)
+- Set calendar reminder well before expiry
+- Document certificate regeneration and redeployment runbook
 
 ---
 
-## 4. Quick Wins & Security Hardening
-
-| Action | Why |
-|---|---|
-| Move credentials to **AWS Secrets Manager** | Rotate passwords without Lambda redeploy |
-| Lock EC2 Security Group to **Lambda's Security Group** only | No public database exposure — not open to 0.0.0.0/0 |
-| Remove `host` rule from pg_hba.conf once SSL is confirmed | Enforce SSL-only; reject all plain connections |
-| Store `ca.crt` in **S3 with bucket policy** (not hardcoded in Lambda) | Easier cert rotation |
-| Set **cert expiry reminders** (certs above are 3650 days / ~10 years) | Avoid silent expiry breaking connections |
-| Enable **CloudTrail + VPC Flow Logs** | Audit who connected and when |
-| Migrate credentials to **IAM auth** if you move to RDS later | Eliminates passwords entirely |
-
----
-
-*Generated for: PostgreSQL on EC2 (Docker) + Python Lambda client*
+*Project: InsightGen — PostgreSQL on EC2 (Docker) + Python Lambda*
