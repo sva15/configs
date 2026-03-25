@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-Over the past period, I have operated as the **sole DevOps and Cloud owner across three simultaneous live projects** — Novus BiaB on Azure, Novus CBA on AWS, and InsightGen across GCP and AWS — while also supporting two additional teams. Every workstream listed below was independently owned, executed, and delivered without waiting for direction. Alongside delivery, I have consistently supported and guided junior engineers through technical challenges, actively unblocking them and helping them grow.
+Over the past period, I have operated as the **sole DevOps and Cloud owner across three simultaneous live projects** — Novus BiaB on Azure, Novus CBA on AWS, and InsightGen across GCP and AWS — while also supporting two additional teams. Every workstream listed below was independently owned, executed, and delivered without waiting for direction. Alongside delivery, I have consistently supported and guided other engineers through technical challenges, actively unblocking them and helping them grow.
 
 In parallel, I earned three industry certifications while managing all of the below at full capacity.
 
@@ -22,7 +22,7 @@ In parallel, I earned three industry certifications while managing all of the be
 
 ## Team Leadership & Peer Support
 
-While I operate as an individual owner across all three projects, I actively support junior and peer engineers whenever they face technical blockers. This includes troubleshooting issues they are stuck on, explaining concepts and approaches, reviewing their work, and guiding them toward the right solution rather than just handing them answers. My goal is to help the people around me grow their capability, not just get things done. This support spans all three cloud providers and covers infrastructure, CI/CD, security, and platform operations — wherever the team needs help.
+While I operate as an individual devops/cloud operations member across all three projects, I actively support junior and peer engineers whenever they face technical blockers. This includes troubleshooting issues they are stuck on, explaining concepts and approaches, reviewing their work, and guiding them toward the right solution rather than just handing them answers. My goal is to help the people around me grow their capability, not just get things done. This support spans all three cloud providers and covers infrastructure, CI/CD, security, and platform operations — wherever the team needs help.
 
 ---
 
@@ -69,7 +69,7 @@ Wrote comprehensive Terraform IaC to fully automate deployment of the entire Nov
 
 **Cost Optimisation**
 
-Independently audited the entire Novus BiaB Azure environment for cost inefficiencies — identified oversized VMs, unused resources, unattached disks, and idle services. Executed rightsizing of compute resources, cleaned up unused infrastructure, and optimised storage tiers — **delivering approximately ₹30,000 in cost savings**, entirely self-driven with no direction from management.
+Independently audited the entire Novus BiaB Azure environment for cost inefficiencies — identified oversized VMs, unused resources, unattached disks, and idle services. Executed rightsizing of compute resources, cleaned up unused infrastructure, and optimised storage tiers — **delivering approximately ₹30,000 in cost savings**.
 
 **Observability & Monitoring**
 
@@ -89,7 +89,7 @@ Maintaining all platform components across the Novus BiaB project:
 - **NGINX Reverse Proxy** — onboarding new API routes, updating upstream configurations, managing SSL termination, and applying configuration changes with zero-downtime reloads.
 - **WSO2 API Manager** — managing the full API lifecycle including publishing APIs, configuring throttling and rate-limiting policies, managing subscriber access and subscription tiers, and enforcing security policies on the API gateway.
 - **Keycloak** — deploying and maintaining Keycloak as the identity and access management platform, managing multiple realms, configuring OAuth2/OIDC clients, defining roles and role mappings, and maintaining authentication flows for each application.
-- **Self-hosted GitLab** — running GitLab as a containerised application within the Azure environment, responsible for container health, upgrades, backup configuration, repository management, CI/CD runner configuration, and access control.
+- **Self-hosted GitLab** — running GitLab as a containerised application within the Azure environment, responsible for container health, upgrades, backup configuration, repository management, and access control.
 - **Kestra** — deploying and maintaining Kestra as the workflow orchestration platform for automating data and operational workflows.
 - **Kafka** — maintaining the Apache Kafka messaging and event streaming layer — managing brokers, topics, consumer groups, and ensuring reliability of the event pipeline across services.
 - **Temporal** — maintaining the Temporal workflow engine — managing workers, namespaces, and monitoring workflow health for durable, fault-tolerant process execution.
@@ -118,7 +118,7 @@ Coordinating with AWS cloud and security teams to ensure all workloads remain co
 
 **GitHub Enterprise Administration**
 
-Administering the entire GitHub Enterprise organisation for InsightGen — managing all code repositories, team structures, and member access across the organisation. Configuring and enforcing branch protection rules, CODEOWNERS files, required reviewers, and status checks across all repositories to maintain code quality and prevent unauthorised changes.
+Administering the entire GitHub Enterprise organisation for InsightGen — managing all code repositories, team structures, and member access across the organisation. Configuring and enforcing branch protection rules across all repositories to maintain code quality and prevent unauthorised changes.
 
 Enforcing repository naming conventions, hygiene standards, and archival policies across the organisation. Managing GitHub Actions workflows and integrating them with the broader CI/CD platform. Coordinating with the global GIT governance and security teams to understand organisation-wide policies and implementing them correctly within the GitHub Enterprise environment.
 
@@ -168,9 +168,9 @@ Supported a separate team developing an **OpenAI RAG (Retrieval-Augmented Genera
 
 **Alphagen Team**
 
-Provisioned AWS access for the Alphagen team — created IAM users, roles, and permission policies following the principle of least privilege, ensuring the team had exactly the access they needed without unnecessary exposure. Supported the team through their complete initial AWS environment setup — provisioned and configured EC2 instances, set up networking (VPCs, subnets, security groups), configured storage, and ensured all foundational infrastructure was in place.
+Supporting the Alphagen team as a standalone project — acting as their dedicated DevOps and Cloud point of contact for infrastructure and access needs. Managing all cloud access and permissions, supporting infrastructure setup, advising on architecture decisions, and helping the team navigate cloud governance requirements and organisational policies.
 
-Onboarded the Alphagen team into the GitHub Enterprise organisation — created their repositories, configured team structures, assigned appropriate access levels, set up branch protection rules and CODEOWNERS files, and ensured all repos followed organisational standards from day one. Deployed Alphagen team applications onto AWS EC2 and continue maintaining their repositories within the GitHub Enterprise organisation on an ongoing basis.
+Onboarded the Alphagen team into the GitHub Enterprise organisation — created their repositories, configured team structures, assigned appropriate access levels, set up branch protection rules. Deployed Alphagen team applications onto AWS EC2 and continue maintaining their repositories within the GitHub Enterprise organisation on an ongoing basis.
 
 **Thought Machine Team**
 
@@ -181,8 +181,7 @@ Supporting the Thought Machine team as a standalone project — acting as their 
 ## Standards Upheld Across All Projects
 
 - Least-privilege IAM enforced across Azure and AWS — no over-permissioned roles or service accounts.
-- Encryption in transit and at rest implemented across all database and storage layers on all three cloud providers.
-- DevSecOps pipeline controls prevent any insecure build from reaching production across all projects.
+- Proactively drove cost optimisation across all three cloud providers — reducing GCP spend by over $330/month, AWS spend by $1,000/month, and delivering $320 in Azure savings.
 - Active identification and remediation of security misconfigurations across Azure, AWS, and GCP.
 - Ongoing coordination with cloud, networking, security, and governance teams across all three cloud providers.
 
