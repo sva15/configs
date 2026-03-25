@@ -1,0 +1,198 @@
+<!DOCTYPE html><html><head>
+      <title>promotion-points</title>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      
+      <link rel="stylesheet" href="file:///c:\Users\svara\.vscode\extensions\shd101wyy.markdown-preview-enhanced-0.8.21\crossnote\dependencies\katex\katex.min.css">
+      
+      
+      
+      
+      
+      <style>
+      code[class*=language-],pre[class*=language-]{color:#333;background:0 0;font-family:Consolas,"Liberation Mono",Menlo,Courier,monospace;text-align:left;white-space:pre;word-spacing:normal;word-break:normal;word-wrap:normal;line-height:1.4;-moz-tab-size:8;-o-tab-size:8;tab-size:8;-webkit-hyphens:none;-moz-hyphens:none;-ms-hyphens:none;hyphens:none}pre[class*=language-]{padding:.8em;overflow:auto;border-radius:3px;background:#f5f5f5}:not(pre)>code[class*=language-]{padding:.1em;border-radius:.3em;white-space:normal;background:#f5f5f5}.token.blockquote,.token.comment{color:#969896}.token.cdata{color:#183691}.token.doctype,.token.macro.property,.token.punctuation,.token.variable{color:#333}.token.builtin,.token.important,.token.keyword,.token.operator,.token.rule{color:#a71d5d}.token.attr-value,.token.regex,.token.string,.token.url{color:#183691}.token.atrule,.token.boolean,.token.code,.token.command,.token.constant,.token.entity,.token.number,.token.property,.token.symbol{color:#0086b3}.token.prolog,.token.selector,.token.tag{color:#63a35c}.token.attr-name,.token.class,.token.class-name,.token.function,.token.id,.token.namespace,.token.pseudo-class,.token.pseudo-element,.token.url-reference .token.variable{color:#795da3}.token.entity{cursor:help}.token.title,.token.title .token.punctuation{font-weight:700;color:#1d3e81}.token.list{color:#ed6a43}.token.inserted{background-color:#eaffea;color:#55a532}.token.deleted{background-color:#ffecec;color:#bd2c00}.token.bold{font-weight:700}.token.italic{font-style:italic}.language-json .token.property{color:#183691}.language-markup .token.tag .token.punctuation{color:#333}.language-css .token.function,code.language-css{color:#0086b3}.language-yaml .token.atrule{color:#63a35c}code.language-yaml{color:#183691}.language-ruby .token.function{color:#333}.language-markdown .token.url{color:#795da3}.language-makefile .token.symbol{color:#795da3}.language-makefile .token.variable{color:#183691}.language-makefile .token.builtin{color:#0086b3}.language-bash .token.keyword{color:#0086b3}pre[data-line]{position:relative;padding:1em 0 1em 3em}pre[data-line] .line-highlight-wrapper{position:absolute;top:0;left:0;background-color:transparent;display:block;width:100%}pre[data-line] .line-highlight{position:absolute;left:0;right:0;padding:inherit 0;margin-top:1em;background:hsla(24,20%,50%,.08);background:linear-gradient(to right,hsla(24,20%,50%,.1) 70%,hsla(24,20%,50%,0));pointer-events:none;line-height:inherit;white-space:pre}pre[data-line] .line-highlight:before,pre[data-line] .line-highlight[data-end]:after{content:attr(data-start);position:absolute;top:.4em;left:.6em;min-width:1em;padding:0 .5em;background-color:hsla(24,20%,50%,.4);color:#f4f1ef;font:bold 65%/1.5 sans-serif;text-align:center;vertical-align:.3em;border-radius:999px;text-shadow:none;box-shadow:0 1px #fff}pre[data-line] .line-highlight[data-end]:after{content:attr(data-end);top:auto;bottom:.4em}html body{font-family:'Helvetica Neue',Helvetica,'Segoe UI',Arial,freesans,sans-serif;font-size:16px;line-height:1.6;color:#333;background-color:#fff;overflow:initial;box-sizing:border-box;word-wrap:break-word}html body>:first-child{margin-top:0}html body h1,html body h2,html body h3,html body h4,html body h5,html body h6{line-height:1.2;margin-top:1em;margin-bottom:16px;color:#000}html body h1{font-size:2.25em;font-weight:300;padding-bottom:.3em}html body h2{font-size:1.75em;font-weight:400;padding-bottom:.3em}html body h3{font-size:1.5em;font-weight:500}html body h4{font-size:1.25em;font-weight:600}html body h5{font-size:1.1em;font-weight:600}html body h6{font-size:1em;font-weight:600}html body h1,html body h2,html body h3,html body h4,html body h5{font-weight:600}html body h5{font-size:1em}html body h6{color:#5c5c5c}html body strong{color:#000}html body del{color:#5c5c5c}html body a:not([href]){color:inherit;text-decoration:none}html body a{color:#08c;text-decoration:none}html body a:hover{color:#00a3f5;text-decoration:none}html body img{max-width:100%}html body>p{margin-top:0;margin-bottom:16px;word-wrap:break-word}html body>ol,html body>ul{margin-bottom:16px}html body ol,html body ul{padding-left:2em}html body ol.no-list,html body ul.no-list{padding:0;list-style-type:none}html body ol ol,html body ol ul,html body ul ol,html body ul ul{margin-top:0;margin-bottom:0}html body li{margin-bottom:0}html body li.task-list-item{list-style:none}html body li>p{margin-top:0;margin-bottom:0}html body .task-list-item-checkbox{margin:0 .2em .25em -1.8em;vertical-align:middle}html body .task-list-item-checkbox:hover{cursor:pointer}html body blockquote{margin:16px 0;font-size:inherit;padding:0 15px;color:#5c5c5c;background-color:#f0f0f0;border-left:4px solid #d6d6d6}html body blockquote>:first-child{margin-top:0}html body blockquote>:last-child{margin-bottom:0}html body hr{height:4px;margin:32px 0;background-color:#d6d6d6;border:0 none}html body table{margin:10px 0 15px 0;border-collapse:collapse;border-spacing:0;display:block;width:100%;overflow:auto;word-break:normal;word-break:keep-all}html body table th{font-weight:700;color:#000}html body table td,html body table th{border:1px solid #d6d6d6;padding:6px 13px}html body dl{padding:0}html body dl dt{padding:0;margin-top:16px;font-size:1em;font-style:italic;font-weight:700}html body dl dd{padding:0 16px;margin-bottom:16px}html body code{font-family:Menlo,Monaco,Consolas,'Courier New',monospace;font-size:.85em;color:#000;background-color:#f0f0f0;border-radius:3px;padding:.2em 0}html body code::after,html body code::before{letter-spacing:-.2em;content:'\00a0'}html body pre>code{padding:0;margin:0;word-break:normal;white-space:pre;background:0 0;border:0}html body .highlight{margin-bottom:16px}html body .highlight pre,html body pre{padding:1em;overflow:auto;line-height:1.45;border:#d6d6d6;border-radius:3px}html body .highlight pre{margin-bottom:0;word-break:normal}html body pre code,html body pre tt{display:inline;max-width:initial;padding:0;margin:0;overflow:initial;line-height:inherit;word-wrap:normal;background-color:transparent;border:0}html body pre code:after,html body pre code:before,html body pre tt:after,html body pre tt:before{content:normal}html body blockquote,html body dl,html body ol,html body p,html body pre,html body ul{margin-top:0;margin-bottom:16px}html body kbd{color:#000;border:1px solid #d6d6d6;border-bottom:2px solid #c7c7c7;padding:2px 4px;background-color:#f0f0f0;border-radius:3px}@media print{html body{background-color:#fff}html body h1,html body h2,html body h3,html body h4,html body h5,html body h6{color:#000;page-break-after:avoid}html body blockquote{color:#5c5c5c}html body pre{page-break-inside:avoid}html body table{display:table}html body img{display:block;max-width:100%;max-height:100%}html body code,html body pre{word-wrap:break-word;white-space:pre}}.markdown-preview{width:100%;height:100%;box-sizing:border-box}.markdown-preview ul{list-style:disc}.markdown-preview ul ul{list-style:circle}.markdown-preview ul ul ul{list-style:square}.markdown-preview ol{list-style:decimal}.markdown-preview ol ol,.markdown-preview ul ol{list-style-type:lower-roman}.markdown-preview ol ol ol,.markdown-preview ol ul ol,.markdown-preview ul ol ol,.markdown-preview ul ul ol{list-style-type:lower-alpha}.markdown-preview .newpage,.markdown-preview .pagebreak{page-break-before:always}.markdown-preview pre.line-numbers{position:relative;padding-left:3.8em;counter-reset:linenumber}.markdown-preview pre.line-numbers>code{position:relative}.markdown-preview pre.line-numbers .line-numbers-rows{position:absolute;pointer-events:none;top:1em;font-size:100%;left:0;width:3em;letter-spacing:-1px;border-right:1px solid #999;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none}.markdown-preview pre.line-numbers .line-numbers-rows>span{pointer-events:none;display:block;counter-increment:linenumber}.markdown-preview pre.line-numbers .line-numbers-rows>span:before{content:counter(linenumber);color:#999;display:block;padding-right:.8em;text-align:right}.markdown-preview .mathjax-exps .MathJax_Display{text-align:center!important}.markdown-preview:not([data-for=preview]) .code-chunk .code-chunk-btn-group{display:none}.markdown-preview:not([data-for=preview]) .code-chunk .status{display:none}.markdown-preview:not([data-for=preview]) .code-chunk .output-div{margin-bottom:16px}.markdown-preview .md-toc{padding:0}.markdown-preview .md-toc .md-toc-link-wrapper .md-toc-link{display:inline;padding:.25rem 0}.markdown-preview .md-toc .md-toc-link-wrapper .md-toc-link div,.markdown-preview .md-toc .md-toc-link-wrapper .md-toc-link p{display:inline}.markdown-preview .md-toc .md-toc-link-wrapper.highlighted .md-toc-link{font-weight:800}.scrollbar-style::-webkit-scrollbar{width:8px}.scrollbar-style::-webkit-scrollbar-track{border-radius:10px;background-color:transparent}.scrollbar-style::-webkit-scrollbar-thumb{border-radius:5px;background-color:rgba(150,150,150,.66);border:4px solid rgba(150,150,150,.66);background-clip:content-box}html body[for=html-export]:not([data-presentation-mode]){position:relative;width:100%;height:100%;top:0;left:0;margin:0;padding:0;overflow:auto}html body[for=html-export]:not([data-presentation-mode]) .markdown-preview{position:relative;top:0;min-height:100vh}@media screen and (min-width:914px){html body[for=html-export]:not([data-presentation-mode]) .markdown-preview{padding:2em calc(50% - 457px + 2em)}}@media screen and (max-width:914px){html body[for=html-export]:not([data-presentation-mode]) .markdown-preview{padding:2em}}@media screen and (max-width:450px){html body[for=html-export]:not([data-presentation-mode]) .markdown-preview{font-size:14px!important;padding:1em}}@media print{html body[for=html-export]:not([data-presentation-mode]) #sidebar-toc-btn{display:none}}html body[for=html-export]:not([data-presentation-mode]) #sidebar-toc-btn{position:fixed;bottom:8px;left:8px;font-size:28px;cursor:pointer;color:inherit;z-index:99;width:32px;text-align:center;opacity:.4}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] #sidebar-toc-btn{opacity:1}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc{position:fixed;top:0;left:0;width:300px;height:100%;padding:32px 0 48px 0;font-size:14px;box-shadow:0 0 4px rgba(150,150,150,.33);box-sizing:border-box;overflow:auto;background-color:inherit}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc::-webkit-scrollbar{width:8px}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc::-webkit-scrollbar-track{border-radius:10px;background-color:transparent}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc::-webkit-scrollbar-thumb{border-radius:5px;background-color:rgba(150,150,150,.66);border:4px solid rgba(150,150,150,.66);background-clip:content-box}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc a{text-decoration:none}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc .md-toc{padding:0 16px}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc .md-toc .md-toc-link-wrapper .md-toc-link{display:inline;padding:.25rem 0}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc .md-toc .md-toc-link-wrapper .md-toc-link div,html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc .md-toc .md-toc-link-wrapper .md-toc-link p{display:inline}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc .md-toc .md-toc-link-wrapper.highlighted .md-toc-link{font-weight:800}html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .markdown-preview{left:300px;width:calc(100% - 300px);padding:2em calc(50% - 457px - 300px / 2);margin:0;box-sizing:border-box}@media screen and (max-width:1274px){html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .markdown-preview{padding:2em}}@media screen and (max-width:450px){html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .markdown-preview{width:100%}}html body[for=html-export]:not([data-presentation-mode]):not([html-show-sidebar-toc]) .markdown-preview{left:50%;transform:translateX(-50%)}html body[for=html-export]:not([data-presentation-mode]):not([html-show-sidebar-toc]) .md-sidebar-toc{display:none}
+/* Please visit the URL below for more information: */
+/*   https://shd101wyy.github.io/markdown-preview-enhanced/#/customize-css */
+
+      </style>
+      <script type="text/javascript">
+  document.addEventListener("DOMContentLoaded", function () {
+    // your code here
+  });
+</script>
+    </head>
+    <body for="html-export">
+      <div class="crossnote markdown-preview  ">
+      
+<h1 id="promotion-case--devops--cloud-engineer">Promotion Case — DevOps &amp; Cloud Engineer </h1>
+<h2 id="executive-summary">Executive Summary </h2>
+<p>Over the past period, I have operated as the <strong>sole DevOps and Cloud owner across three simultaneous projects</strong> — Novus BiaB on Azure, Novus CBA on AWS, and InsightGen across GCP and AWS — while also supporting two additional teams. Every workstream listed below was independently owned, executed, and delivered without waiting for direction. Alongside delivery, I have consistently supported and guided other engineers through technical challenges, actively unblocking them and helping them grow.</p>
+<p>In parallel, I earned three industry certifications while managing all of the below at full capacity.</p>
+<hr>
+<h2 id="certifications">Certifications </h2>
+<table>
+<thead>
+<tr>
+<th>Certification</th>
+<th>Provider</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AWS Certified DevOps Engineer – Professional</td>
+<td>Amazon Web Services</td>
+</tr>
+<tr>
+<td>AWS Certified AI Practitioner</td>
+<td>Amazon Web Services</td>
+</tr>
+<tr>
+<td>AZ-400: Microsoft Azure DevOps Engineer Expert</td>
+<td>Microsoft</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="team-leadership--peer-support">Team Leadership &amp; Peer Support </h2>
+<p>While I operate as an individual devops/cloud operations member across all three projects, I actively support junior and peer engineers whenever they face technical blockers. This includes troubleshooting issues they are stuck on, explaining concepts and approaches, reviewing their work, and guiding them toward the right solution rather than just handing them answers. My goal is to help the people around me grow their capability, not just get things done. This support spans all three cloud providers and covers infrastructure, CI/CD, security, and platform operations — wherever the team needs help.</p>
+<hr>
+<h2 id="delivered-cost-savings">Delivered Cost Savings </h2>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Before</th>
+<th>After</th>
+<th>Saving</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Azure — Novus BiaB</td>
+<td>~$1000/month</td>
+<td>~$680/month</td>
+<td>~$320/month</td>
+</tr>
+<tr>
+<td>GCP — InsightGen</td>
+<td>~$420/month</td>
+<td>~$100/month</td>
+<td>~$320/month</td>
+</tr>
+<tr>
+<td>AWS — InsightGen</td>
+<td>~$1,500/month</td>
+<td>~$500/month</td>
+<td>~$1,000/month</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="project-1--novus-biab-azure">Project 1 — Novus BiaB (Azure) </h2>
+<p><strong>CI/CD &amp; DevSecOps</strong></p>
+<p>Designed and built Jenkins CI/CD pipelines covering the full release cycle — code checkout, build, test, containerisation, and deployment across all environments. Refactored all existing pipelines using Jenkins Shared Libraries, extracting common logic into reusable functions so every pipeline references the same core code — eliminating duplication and making bug fixes apply everywhere at once.</p>
+<p>Implemented parameterised multi-environment builds so a single pipeline definition handles both Dev and Production — no separate pipeline per environment, no configuration drift between them.</p>
+<p>Embedded a full DevSecOps security scanning stage into every pipeline: SAST for source code vulnerabilities, SCA for third-party library CVEs, and Trivy for container image scanning at OS and application level. Configured automated build gates — any critical or high-severity finding blocks deployment immediately, enforcing zero-tolerance on known vulnerabilities reaching production.</p>
+<p>Implemented HTTPS/TLS encryption across all Novus BiaB applications for both Dev and Production — configured SSL certificates, updated NGINX and application configs, and validated end-to-end encrypted traffic.</p>
+<p><strong>Cloud Infrastructure &amp; IaC</strong></p>
+<p>Acting as the full Azure Administrator for Novus BiaB — solely responsible for all cloud operations including VM provisioning, virtual networking (VNets, subnets, NSGs, peering), storage accounts, Azure Active Directory, RBAC, and resource group governance.</p>
+<p>Wrote comprehensive Terraform IaC to fully automate deployment of the entire Novus BiaB environment across multiple Azure accounts — every resource defined in code, version-controlled, and deployable in a single run. Built multi-environment configurations using Terraform workspaces and variable files, making Dev and Production independently deployable with zero configuration drift. Also worked with Azure ARM templates for specific infrastructure provisioning and environment configuration tasks.</p>
+<p><strong>Azure Landing Zone Migration</strong> — independently planned and executed the full migration of the Azure subscription into an Azure Landing Zone. This was one of the most complex and high-risk tasks undertaken:</p>
+<ul>
+<li>Remapped all network IP address spaces and CIDRs as the Landing Zone introduced a new hub-and-spoke network topology.</li>
+<li>Updated all DNS configurations so every service and application remained reachable after the network changes.</li>
+<li>Reconfigured all application-level settings referencing environment-specific IPs, hostnames, and endpoints.</li>
+<li>Updated every CI/CD pipeline to reflect the new subscription structure, resource IDs, and service principal permissions.</li>
+<li>Migrated all Terraform state files to align with the new subscription, resource group, and networking structure.</li>
+<li>Coordinated closely with networking, security, and application teams throughout the migration.</li>
+<li>Carefully sequenced all changes and validated each step — zero unplanned downtime across the entire migration window.</li>
+<li>The result was a more secure, governed, and scalable cloud foundation aligned with enterprise Landing Zone best practices.</li>
+</ul>
+<p><strong>Cost Optimisation</strong></p>
+<p>Independently audited the entire Novus BiaB Azure environment for cost inefficiencies — identified oversized VMs, unused resources, unattached disks, and idle services. Executed rightsizing of compute resources, cleaned up unused infrastructure, and optimised storage tiers — <strong>delivering approximately ₹30,000 in cost savings</strong>.</p>
+<p><strong>Observability &amp; Monitoring</strong></p>
+<p>Designed and implemented a full observability stack from scratch covering all Azure VMs and all containerised workloads:</p>
+<ul>
+<li><strong>ELK Stack</strong> — centralised log aggregation with Logstash pipelines parsing and indexing logs, Kibana dashboards for structured log search and analysis across the entire platform.</li>
+<li><strong>Prometheus + Node Exporter + cAdvisor</strong> — system-level metrics collection across all VMs and container-level resource visibility across all container hosts.</li>
+<li><strong>Grafana</strong> — comprehensive operational dashboards giving the team real-time visibility into system health, resource utilisation, and application performance at both infrastructure and container level.</li>
+<li><strong>SigNoz</strong> — APM and distributed tracing for end-to-end request visibility across microservices, identifying service-to-service latency, slow queries, and performance bottlenecks.</li>
+</ul>
+<p>Configured alerting in Prometheus Alertmanager and Grafana covering CPU and memory pressure, container crash loops, HTTP error rate spikes, and disk exhaustion — all routed to a dedicated Microsoft Teams channel for immediate team notification.</p>
+<p><strong>Platform Operations</strong></p>
+<p>Maintaining all platform components across the Novus BiaB project:</p>
+<ul>
+<li><strong>NGINX Reverse Proxy</strong> — onboarding new API routes, updating upstream configurations, managing SSL termination, and applying configuration changes with zero-downtime reloads.</li>
+<li><strong>WSO2 API Manager</strong> — managing the full API lifecycle including publishing APIs, configuring throttling and rate-limiting policies, managing subscriber access and subscription tiers, and enforcing security policies on the API gateway.</li>
+<li><strong>Keycloak</strong> — deploying and maintaining Keycloak as the identity and access management platform, managing multiple realms, configuring OAuth2/OIDC clients, defining roles and role mappings, and maintaining authentication flows for each application.</li>
+<li><strong>Self-hosted GitLab</strong> — running GitLab as a containerised application within the Azure environment, responsible for container health, upgrades, backup configuration, repository management, and access control.</li>
+<li><strong>Kestra</strong> — deploying and maintaining Kestra as the workflow orchestration platform for automating data and operational workflows.</li>
+<li><strong>Kafka</strong> — maintaining the Apache Kafka messaging and event streaming layer — managing brokers, topics, consumer groups, and ensuring reliability of the event pipeline across services.</li>
+<li><strong>Temporal</strong> — maintaining the Temporal workflow engine — managing workers, namespaces, and monitoring workflow health for durable, fault-tolerant process execution.</li>
+<li><strong>Database Management</strong> — maintaining all project databases across Dev and Production including provisioning, configuration tuning, access control, backup schedules, performance monitoring, and encryption at rest.</li>
+<li><strong>JIRA Administration</strong> — maintaining JIRA dashboards, boards, and project configurations, customising dashboards to give project leads and stakeholders clear visibility into delivery progress, sprint health, and issue status.</li>
+</ul>
+<hr>
+<h2 id="project-2--novus-cba-aws">Project 2 — Novus CBA (AWS) </h2>
+<p>Solely maintaining the entire AWS account for the Novus CBA team — responsible for all day-to-day cloud operations, account governance, IAM management, and security compliance. Wrote CloudFormation templates to define, provision, and manage all AWS infrastructure as code — covering compute, networking, storage, and application resources, making the environment fully reproducible and version-controlled.</p>
+<p>Designed and implemented CI/CD pipelines for all application deployments — applying the same DevOps best practices and pipeline standards established in Novus BiaB.</p>
+<p>Managing <strong>Kong API Gateway</strong> — deploying and maintaining Kong as the API gateway, managing API routes, plugins (authentication, rate limiting, logging), upstream services, and consumer configurations.</p>
+<p>Maintaining <strong>self-hosted GitLab</strong> for the CBA team — managing repositories, access control, branch protection rules, CI/CD runner integrations, and ensuring platform reliability.</p>
+<p>Configured and maintained a cloud-hosted <strong>MongoDB instance from the AWS Marketplace</strong> — handling provisioning, connection configuration, access control, and integration with CBA applications.</p>
+<p>Coordinating with AWS cloud and security teams to ensure all workloads remain compliant with governing policies. Actively identifying and resolving security findings and misconfigurations across the AWS environment.</p>
+<hr>
+<h2 id="project-3--insightgen-gcp--aws">Project 3 — InsightGen (GCP + AWS) </h2>
+<p><strong>GitHub Enterprise Administration</strong></p>
+<p>Administering the entire GitHub Enterprise organisation for InsightGen — managing all code repositories, team structures, and member access across the organisation. Configuring and enforcing branch protection rules across all repositories to maintain code quality and prevent unauthorised changes.</p>
+<p>Enforcing repository naming conventions, hygiene standards, and archival policies across the organisation. Managing GitHub Actions workflows and integrating them with the broader CI/CD platform. Coordinating with the global GIT governance and security teams to understand organisation-wide policies and implementing them correctly within the GitHub Enterprise environment.</p>
+<p>Proactively monitoring for secrets accidentally committed to repositories and executing full remediation — including secret rotation, commit history cleanup, and enforcing secret scanning policies.</p>
+<p><strong>GCP — Serverless Infrastructure &amp; AI</strong></p>
+<p>Designed and built the entire serverless deployment infrastructure on GCP from scratch — Cloud Run for containerised API and backend services, Cloud Run Functions for event-driven and lightweight function workloads. Configured <strong>Serverless Network Endpoint Groups (NEGs)</strong> and <strong>GCP Load Balancers</strong> to route traffic reliably to Cloud Run services — handling path-based routing, SSL termination, and traffic distribution across the environment.</p>
+<p>Worked with <strong>Vertex AI</strong> — managing AI model deployments and supporting the team in consuming Vertex AI services within the InsightGen platform.</p>
+<p>Implemented automated CI/CD deployment pipelines for all APIs and frontend applications — covering build, test, containerisation, and deployment to the correct Cloud Run service and environment. Maintained fully separate Dev and Int environments on GCP — each with independent configurations to prevent cross-environment impact. Collaborated with GCP cloud governance, networking, and the global security teams to implement platform-level policies correctly within the GCP project structure.</p>
+<p>Continuously monitored GCP billing and resource usage — identified over-provisioned Cloud Run configurations, idle services, and inefficient resource allocations. <strong>Reduced daily GCP spend from <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>14</mn><mi mathvariant="normal">/</mi><mi>d</mi><mi>a</mi><mi>y</mi><mi>t</mi><mi>o</mi></mrow><annotation encoding="application/x-tex">14/day to</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">14/</span><span class="mord mathnormal">d</span><span class="mord mathnormal">a</span><span class="mord mathnormal" style="margin-right:0.03588em;">y</span><span class="mord mathnormal">t</span><span class="mord mathnormal">o</span></span></span></span>3/day, saving over $330/month.</strong></p>
+<p><strong>AWS — AI Workloads, CI/CD &amp; Infrastructure</strong></p>
+<p>Built and maintained full CI/CD pipelines on AWS using <strong>CodePipeline, CodeBuild, and CodeDeploy</strong> — covering automated build, test, containerisation, and deployment workflows for all InsightGen applications on AWS.</p>
+<p>Managed deployments across multiple compute targets:</p>
+<ul>
+<li><strong>Lambda-based deployments</strong> — packaging and deploying serverless functions as part of the InsightGen application stack.</li>
+<li><strong>EC2 container deployments</strong> — deploying and managing containerised workloads on EC2 instances.</li>
+<li><strong>Amazon ECR</strong> — managing container image repositories, image lifecycle policies, and integrating ECR into all deployment pipelines.</li>
+</ul>
+<p>Deployed the <strong>AIForce application</strong> into InsightGen environments, configured its foundational services, and integrated them into the existing infrastructure and workflows. Managing <strong>AWS Bedrock</strong> model access and ensuring AI workload infrastructure is reliable and cost-controlled.</p>
+<p>Built <strong>CloudWatch dashboards</strong> to visualise Bedrock token usage across all models in use — giving the team real-time visibility into AI consumption patterns and helping forecast costs. Configured <strong>CloudWatch metric alarms</strong> on token consumption to detect and alert on unusual spikes immediately — preventing runaway AI costs.</p>
+<p>Managing <strong>Kong API Gateway</strong> and <strong>Keycloak</strong> across InsightGen AWS environments — maintaining API routes, plugins, authentication flows, realms, OIDC clients, role mappings, and access policies for all applications and services.</p>
+<p>Implemented <strong>encryption in transit and at rest</strong> across all databases — configured TLS connections, enabled storage encryption, and validated that no unencrypted data pathways exist across the environment.</p>
+<p>Replicated the entire InsightGen application stack from GCP onto AWS — maintaining both cloud environments in parallel with consistent deployment standards, configuration patterns, and operational practices. Maintained Dev and Int environments on AWS aligned with the GCP environment structure.</p>
+<p><strong>Continuously monitored AWS billing — reduced monthly spend from <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>1</mn><mo separator="true">,</mo><mn>500</mn><mi mathvariant="normal">/</mi><mi>m</mi><mi>o</mi><mi>n</mi><mi>t</mi><mi>h</mi><mi>t</mi><mi>o</mi></mrow><annotation encoding="application/x-tex">1,500/month to</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">500/</span><span class="mord mathnormal">m</span><span class="mord mathnormal">o</span><span class="mord mathnormal">n</span><span class="mord mathnormal">t</span><span class="mord mathnormal">h</span><span class="mord mathnormal">t</span><span class="mord mathnormal">o</span></span></span></span>500/month, saving $1,000/month.</strong></p>
+<p><strong>AI &amp; Emerging Technology</strong></p>
+<p>Deployed the AIForce application and worked on its foundational services — integrating them into the InsightGen infrastructure so the team could consume AI capabilities reliably across environments.</p>
+<p>Supported a separate team developing an <strong>OpenAI RAG (Retrieval-Augmented Generation) POC</strong> — contributed to the technical implementation and helped resolve integration challenges between OpenAI APIs, vector storage, and document retrieval pipelines. Independently configured and maintained Keycloak for the OpenAI team's application — setting up the realm, OIDC clients, and access policies required by the team.</p>
+<hr>
+<h2 id="cross-team-support">Cross-Team Support </h2>
+<p><strong>Alphagen Team</strong></p>
+<p>Supporting the Alphagen team as a standalone project — acting as their dedicated DevOps and Cloud point of contact for infrastructure and access needs. Managing all cloud access and permissions, supporting infrastructure setup, advising on architecture decisions, and helping the team navigate cloud governance requirements and organisational policies.</p>
+<p>Onboarded the Alphagen team into the GitHub Enterprise organisation — created their repositories, configured team structures, assigned appropriate access levels, set up branch protection rules. Deployed Alphagen team applications onto AWS EC2 and continue maintaining their repositories within the GitHub Enterprise organisation on an ongoing basis.</p>
+<p><strong>Thought Machine Team</strong></p>
+<p>Supporting the Thought Machine team as a standalone project — acting as their dedicated DevOps and Cloud point of contact for infrastructure and access needs. Managing all cloud access and permissions, supporting infrastructure setup, advising on architecture decisions, and helping the team navigate cloud governance requirements and organisational policies.</p>
+<hr>
+<h2 id="standards-upheld-across-all-projects">Standards Upheld Across All Projects </h2>
+<ul>
+<li>Least-privilege IAM enforced across Azure and AWS — no over-permissioned roles or service accounts.</li>
+<li>Proactively drove cost optimisation across all three cloud providers — reducing GCP spend by over <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>330</mn><mi mathvariant="normal">/</mi><mi>m</mi><mi>o</mi><mi>n</mi><mi>t</mi><mi>h</mi><mo separator="true">,</mo><mi>A</mi><mi>W</mi><mi>S</mi><mi>s</mi><mi>p</mi><mi>e</mi><mi>n</mi><mi>d</mi><mi>b</mi><mi>y</mi></mrow><annotation encoding="application/x-tex">330/month, AWS spend by</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">330/</span><span class="mord mathnormal">m</span><span class="mord mathnormal">o</span><span class="mord mathnormal">n</span><span class="mord mathnormal">t</span><span class="mord mathnormal">h</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">A</span><span class="mord mathnormal" style="margin-right:0.13889em;">W</span><span class="mord mathnormal" style="margin-right:0.05764em;">S</span><span class="mord mathnormal">s</span><span class="mord mathnormal">p</span><span class="mord mathnormal">e</span><span class="mord mathnormal">n</span><span class="mord mathnormal">d</span><span class="mord mathnormal">b</span><span class="mord mathnormal" style="margin-right:0.03588em;">y</span></span></span></span>1,000/month, and delivering $320 in Azure savings.</li>
+<li>Active identification and remediation of security misconfigurations across Azure, AWS, and GCP.</li>
+<li>Ongoing coordination with cloud, networking, security, and governance teams across all three cloud providers.</li>
+</ul>
+<hr>
+
+      </div>
+      
+      
+    
+    
+    
+    
+    
+    
+  
+    </body></html>
