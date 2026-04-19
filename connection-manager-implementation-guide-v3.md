@@ -1,0 +1,1177 @@
+# Connection Manager Service — Implementation Guide
+
+## Architecture Recap
+
+```
+Lambda (domain_id header)
+    │
+    ▼
+Nginx (EC2 host)  ──/db-proxy/──▶  Connection Manager Container (port 8001)
+                                         │
+                              ┌──────────┴──────────┐
+                              ▼                     ▼
+                     AWS Parameter Store      Common DB (PostgreSQL)
+                     (common DB password)     (domain_credentials table)
+                                                    │
+                                          KMS Decrypt password_encrypted
+                                                    │
+                                          ┌─────────┴─────────┐
+                                          ▼                   ▼
+                                    Domain DB A         Domain DB B
+```
+
+**Flow for every new domain_id:**
+1. Lambda sends `POST /v1/credentials` with `domain_id`
+2. Connection Manager checks its in-memory cache
+3. If not cached → queries Common DB → KMS-decrypts the password → caches result
+4. Returns decrypted credentials to Lambda
+5. Lambda opens its own connection to the Domain DB
+
+---
+
+## Prerequisites Checklist
+
+Before starting, confirm the following on your EC2 instance:
+
+- [ ] Docker installed and running
+- [ ] Nginx installed with write access to `/etc/nginx/conf.d/default.conf`
+- [ ] AWS CLI configured (or EC2 instance has an IAM role attached)
+- [ ] Python 3.12 available locally for testing
+- [ ] PostgreSQL container already running (or you will start one below)
+- [ ] Your EC2 instance is in a VPC and your Lambda will be in the same VPC
+
+---
+
+## Phase 1: AWS Infrastructure Setup
+
+### 1.1 Existing KMS Key
+
+The KMS Customer Managed Key already exists. Verify it is accessible before proceeding:
+
+```bash
+aws kms describe-key \
+  --key-id alias/HCL-USER-KEY-insightgen-postgres-credentials \
+  --region us-east-1 \
+  --query "KeyMetadata.{KeyId:KeyId, Enabled:Enabled, Description:Description}"
+```
+
+Expected output confirms the key is `"Enabled": true`. Note the `KeyId` value — you will need it when running `kms:Encrypt` commands in Phase 2.
+
+---
+
+### 1.2 Update the KMS Key Policy
+
+The key policy must be updated to add the EC2 instance profile so the Connection Manager container can decrypt both the SSM parameter (common DB password) and the KMS ciphertexts stored inside the `domain_credentials` table.
+
+> **How to add more principals in future:** The policy has two clearly marked extension points — see the comments inside the JSON below. Adding a new service role follows the same pattern as the EC2 statement. Adding a new user session follows the same pattern as the `AllowAdminUserSessionFullKMSAccess` statement.
+
+Apply the updated policy:
+
+```bash
+aws kms put-key-policy \
+  --key-id alias/HCL-USER-KEY-insightgen-postgres-credentials \
+  --policy-name default \
+  --region us-east-1 \
+  --policy '{
+  "Version": "2012-10-17",
+  "Id": "key-consolepolicy-restricted-shared-role",
+  "Statement": [
+    {
+      "Sid": "EnableRootAccessAndPreventPermissionDelegation",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:root"
+      },
+      "Action": "kms:*",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:PrincipalType": "Account"
+        }
+      }
+    },
+    {
+      "Sid": "AllowAdminUserSessionFullKMSAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_LZ-Account-Users-AWS_2cc08ead42206ada"
+      },
+      "Action": "kms:*",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:userid": "AROAS6J7QKS2T7Q6KMSCW:john.singa@company.com"
+        }
+      }
+    },
+    {
+      "Sid": "AllowDescribeKeyForApprovedUserSessions",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_LZ-Account-Users-AWS_2cc08ead42206ada"
+      },
+      "Action": "kms:DescribeKey",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:userid": "AROAS6J7QKS2T7Q6KMSCW:john.singa@company.com"
+        }
+      }
+    },
+    {
+      "Sid": "AllowDecryptViaSSMForApprovedUserSessionsOnAllowedPath",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_LZ-Account-Users-AWS_2cc08ead42206ada"
+      },
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:userid": "AROAS6J7QKS2T7Q6KMSCW:john.singa@company.com"
+        },
+        "StringLike": {
+          "kms:ViaService": "ssm.*.amazonaws.com",
+          "kms:EncryptionContext:PARAMETER_ARN": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/insightgen/postgres/*"
+        }
+      }
+    },
+    {
+      "Sid": "DenyDecryptForAllOtherSessionsOfSharedSSORole",
+      "Effect": "Deny",
+      "Principal": {
+        "AWS": "*"
+      },
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:userid": "AROAS6J7QKS2T7Q6KMSCW:john.singa@company.com"
+        },
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::<ACCOUNT_ID>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_LZ-Account-Users-AWS_2cc08ead42206ada"
+        }
+      }
+    },
+    {
+      "Sid": "AllowLambdaRoleDecryptViaSSMForInsightGenPostgres",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:role/HCL-User-Role-InsightGen-Lambda"
+      },
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.us-east-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/insightgen/postgres/*"
+        }
+      }
+    },
+    {
+      "Sid": "AllowEC2RoleDecryptViaSSMForCommonDBPassword",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:instance-profile/HCL-User-Role-InsightGen-EC2"
+      },
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.us-east-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/insightgen/postgres/*"
+        }
+      }
+    },
+    {
+      "Sid": "AllowEC2RoleDirectDecryptForDBTableCiphertexts",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:instance-profile/HCL-User-Role-InsightGen-EC2"
+      },
+      "Action": ["kms:Decrypt", "kms:DescribeKey"],
+      "Resource": "*"
+    }
+  ]
+}'
+```
+
+> **Replace `<ACCOUNT_ID>`** with your AWS account ID in every statement above.
+
+**Why the EC2 role needs two separate statements:**
+
+The connection manager performs two distinct KMS operations that require different statement types:
+
+| Operation | When | KMS call type | Statement that covers it |
+|---|---|---|---|
+| Fetch common DB password from SSM | Container startup (once) | Decrypt via SSM service | `AllowEC2RoleDecryptViaSSMForCommonDBPassword` |
+| Decrypt domain passwords stored in `domain_credentials` table | First request per domain_id | Direct `kms:Decrypt` boto3 call — not via SSM | `AllowEC2RoleDirectDecryptForDBTableCiphertexts` |
+
+The first operation goes through SSM (boto3 → SSM → KMS internally) so the `kms:ViaService` condition applies. The second operation is a direct boto3 `kms.decrypt()` call on the raw ciphertext blob, so there is no `kms:ViaService` context — a ViaService-only statement would silently fail for it.
+
+**How to add more principals who can decrypt:**
+
+- **New service role (e.g. another Lambda or container):** Add a new statement following the same pattern as `AllowEC2RoleDecryptViaSSMForCommonDBPassword` with the new role ARN. If it also needs direct KMS decrypt (not via SSM), add a second statement following `AllowEC2RoleDirectDecryptForDBTableCiphertexts`.
+- **New user session (SSO user):** Add a new statement following the same pattern as `AllowAdminUserSessionFullKMSAccess`, scoped to the specific `aws:userid` value of that person's SSO session.
+
+---
+
+### 1.3 Add SSM Permission to the Existing EC2 Instance Profile
+
+The EC2 instance profile `HCL-User-Role-InsightGen-EC2` already exists. You only need to attach an inline policy granting it permission to read the specific SSM parameter the connection manager will use:
+
+```bash
+aws iam put-role-policy \
+  --role-name HCL-User-Role-InsightGen-EC2 \
+  --policy-name ConnectionManagerSSMAccess \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["ssm:GetParameter"],
+        "Resource": "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:parameter/insightgen/postgres/common-db/password"
+      }
+    ]
+  }'
+```
+
+> The KMS decrypt permission for this role is already handled in the key policy updated in step 1.2 — no separate IAM KMS statement is needed here. AWS evaluates both the key policy and the IAM policy; since the key policy explicitly allows the role, the IAM policy only needs to cover SSM access.
+
+---
+
+### 1.4 Existing Lambda Role
+
+The Lambda role `HCL-User-Role-InsightGen-Lambda` already exists and its KMS decrypt permission is already present in the key policy. No changes are needed to this role.
+
+Confirm it has VPC execution permissions (needed for Lambda to reach the EC2 private IP):
+
+```bash
+aws iam list-attached-role-policies \
+  --role-name HCL-User-Role-InsightGen-Lambda \
+  --query "AttachedPolicies[*].PolicyName"
+```
+
+If `AWSLambdaVPCAccessExecutionRole` is not listed, attach it:
+
+```bash
+aws iam attach-role-policy \
+  --role-name HCL-User-Role-InsightGen-Lambda \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+```
+
+---
+
+## Phase 2: PostgreSQL Database Setup (Manual)
+
+All three databases live inside the **same PostgreSQL container**. You will exec into it and run `psql` commands.
+
+### 2.1 Start PostgreSQL (skip if already running)
+
+```bash
+# Create a Docker network so containers can talk by name
+docker network create app-network
+
+# Start PostgreSQL — adjust password and port as needed
+docker run -d \
+  --name postgres \
+  --network app-network \
+  -p 5432:5432 \
+  -e POSTGRES_USER=ifrs_user \
+  -e POSTGRES_PASSWORD=postgres_root_pass \
+  -v postgres_data:/var/lib/postgresql/data \
+  postgres:16
+```
+
+### 2.2 Create Databases, Users, and Schema
+
+```bash
+# Exec into the PostgreSQL container
+docker exec -it postgres psql -U ifrs_user
+```
+
+Run the following SQL inside `psql`:
+
+```sql
+-- ─────────────────────────────────────────────
+-- Step 1: Create users with known passwords
+-- (these are the passwords you will encrypt with KMS below)
+-- ─────────────────────────────────────────────
+CREATE USER common_user   WITH PASSWORD 'CommonDbPass123!';
+CREATE USER domain_a_user WITH PASSWORD 'DomainAPass456!';
+CREATE USER domain_b_user WITH PASSWORD 'DomainBPass789!';
+
+-- ─────────────────────────────────────────────
+-- Step 2: Create databases
+-- ─────────────────────────────────────────────
+CREATE DATABASE common_db   OWNER common_user;
+CREATE DATABASE domain_db_a OWNER domain_a_user;
+CREATE DATABASE domain_db_b OWNER domain_b_user;
+```
+
+Exit psql (`\q`) and reconnect to set up each database:
+
+```bash
+# Set up common_db schema
+docker exec -it postgres psql -U ifrs_user -d common_db
+```
+
+```sql
+-- Run as ifrs_user superuser inside common_db
+
+CREATE TABLE domain_credentials (
+    id                 SERIAL PRIMARY KEY,
+    domain_id          VARCHAR(100) UNIQUE NOT NULL,
+    host               VARCHAR(255) NOT NULL,
+    port               INTEGER NOT NULL DEFAULT 5432,
+    db_name            VARCHAR(100) NOT NULL,
+    db_user            VARCHAR(100) NOT NULL,
+    password_encrypted TEXT NOT NULL,       -- stores KMS ciphertext (base64)
+    created_at         TIMESTAMPTZ DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+GRANT SELECT ON domain_credentials TO common_user;
+GRANT USAGE, SELECT ON SEQUENCE domain_credentials_id_seq TO common_user;
+```
+
+```bash
+# Set up domain_db_a
+docker exec -it postgres psql -U ifrs_user -d domain_db_a
+```
+
+```sql
+CREATE TABLE tenant_data (
+    id         SERIAL PRIMARY KEY,
+    domain_id  VARCHAR(100) NOT NULL,
+    data_key   VARCHAR(255) NOT NULL,
+    data_value TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+GRANT ALL PRIVILEGES ON TABLE tenant_data TO domain_a_user;
+GRANT USAGE, SELECT ON SEQUENCE tenant_data_id_seq TO domain_a_user;
+```
+
+```bash
+# Set up domain_db_b
+docker exec -it postgres psql -U ifrs_user -d domain_db_b
+```
+
+```sql
+CREATE TABLE tenant_data (
+    id         SERIAL PRIMARY KEY,
+    domain_id  VARCHAR(100) NOT NULL,
+    data_key   VARCHAR(255) NOT NULL,
+    data_value TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+GRANT ALL PRIVILEGES ON TABLE tenant_data TO domain_b_user;
+GRANT USAGE, SELECT ON SEQUENCE tenant_data_id_seq TO domain_b_user;
+```
+
+---
+
+### 2.3 Encrypt Domain DB Passwords Using KMS
+
+Run these commands from **your local machine or bastion** (you need AWS credentials with `kms:Encrypt` permission — your SSO session as `john.singa@company.com` has this via the `AllowAdminUserSessionFullKMSAccess` statement):
+
+```bash
+# Encrypt domain_a password
+echo -n "DomainAPass456!" > /tmp/pass_a.txt
+CIPHER_A=$(aws kms encrypt \
+  --key-id alias/HCL-USER-KEY-insightgen-postgres-credentials \
+  --plaintext fileb:///tmp/pass_a.txt \
+  --query CiphertextBlob \
+  --output text \
+  --region us-east-1)
+echo "Ciphertext A: $CIPHER_A"
+rm /tmp/pass_a.txt
+
+# Encrypt domain_b password
+echo -n "DomainBPass789!" > /tmp/pass_b.txt
+CIPHER_B=$(aws kms encrypt \
+  --key-id alias/HCL-USER-KEY-insightgen-postgres-credentials \
+  --plaintext fileb:///tmp/pass_b.txt \
+  --query CiphertextBlob \
+  --output text \
+  --region us-east-1)
+echo "Ciphertext B: $CIPHER_B"
+rm /tmp/pass_b.txt
+```
+
+> **Important:** Copy the ciphertext values (`$CIPHER_A` and `$CIPHER_B`). You will paste them into the SQL below.
+> Delete the temp files immediately after — never let the plaintext touch disk for longer than needed.
+
+---
+
+### 2.4 Insert Encrypted Credentials into Common DB
+
+The `host` field is the EC2 private IP `10.132.191.157` — this is the address Lambda (inside the VPC) will use to connect to the domain databases.
+
+```bash
+docker exec -it postgres psql -U ifrs_user -d common_db
+```
+
+```sql
+-- Replace the ciphertext values with the actual output from the KMS encrypt commands above.
+
+INSERT INTO domain_credentials (domain_id, host, port, db_name, db_user, password_encrypted)
+VALUES
+  (
+    'tenant_a',
+    '10.132.191.157',
+    5432,
+    'domain_db_a',
+    'domain_a_user',
+    'AQICAHxxx...PASTE_CIPHER_A_HERE...xxx'
+  ),
+  (
+    'tenant_b',
+    '10.132.191.157',
+    5432,
+    'domain_db_b',
+    'domain_b_user',
+    'AQICAHyyy...PASTE_CIPHER_B_HERE...yyy'
+  );
+
+-- Verify
+SELECT domain_id, host, db_name, db_user, LEFT(password_encrypted, 20) || '...' AS pwd_preview
+FROM domain_credentials;
+```
+
+---
+
+## Phase 3: Store Common DB Password in SSM Parameter Store
+
+### Existing parameters (do not modify)
+
+The following parameters already exist and are used by other services. Leave them untouched:
+
+| Parameter path | Value | Used by |
+|---|---|---|
+| `/insightgen/postgres/host` | `10.132.191.157` | Other services |
+| `/insightgen/postgres/port` | `5432` | Other services |
+| `/insightgen/postgres/username` | `ifrs_user` | Other services |
+| `/insightgen/postgres/password` | ifrs_user master password | Other services — **do not use for connection manager** |
+
+### Create a new dedicated parameter for the connection manager
+
+Create a new parameter specifically for `common_user`'s password under the same path hierarchy. This falls within the `/insightgen/postgres/*` wildcard that the existing KMS policy already covers — no policy changes are needed:
+
+```bash
+aws ssm put-parameter \
+  --name "/insightgen/postgres/common-db/password" \
+  --value "CommonDbPass123!" \
+  --type SecureString \
+  --key-id alias/HCL-USER-KEY-insightgen-postgres-credentials \
+  --description "Password for common_user on common_db — used by Connection Manager service only" \
+  --region us-east-1
+
+# Verify it was stored and can be decrypted
+aws ssm get-parameter \
+  --name "/insightgen/postgres/common-db/password" \
+  --with-decryption \
+  --region us-east-1
+```
+
+> After confirming SSM holds the value correctly, the plain text password (`CommonDbPass123!`) should no longer exist anywhere — not in shell history, scripts, or `.env` files. Clear your terminal history if needed: `history -c`
+
+### Final SSM parameter layout under `/insightgen/postgres/`
+
+```
+/insightgen/postgres/
+├── host                        (existing)
+├── port                        (existing)
+├── username                    (existing)
+├── password                    (existing — ifrs_user master, not used here)
+└── common-db/
+    └── password                (new — common_user password, connection manager only)
+```
+
+---
+
+## Phase 4: Connection Manager Service
+
+### 4.1 Project Structure
+
+```
+connection-manager/
+├── app/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── kms_helper.py
+│   ├── connection_manager.py
+│   └── main.py
+├── Dockerfile
+├── requirements.txt
+└── .env.example
+```
+
+---
+
+### 4.2 `requirements.txt`
+
+```
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+psycopg2-binary==2.9.9
+boto3==1.35.0
+pydantic==2.7.0
+```
+
+---
+
+### 4.3 `app/config.py`
+
+```python
+import os
+from dataclasses import dataclass
+
+
+@dataclass
+class Config:
+    aws_region: str            = os.getenv("AWS_REGION", "us-east-1")
+    ssm_parameter_name: str    = os.getenv("SSM_PARAMETER_NAME", "/insightgen/postgres/common-db/password")
+    common_db_host: str        = os.getenv("COMMON_DB_HOST", "postgres")   # Docker service name
+    common_db_port: int        = int(os.getenv("COMMON_DB_PORT", "5432"))
+    common_db_name: str        = os.getenv("COMMON_DB_NAME", "common_db")
+    common_db_user: str        = os.getenv("COMMON_DB_USER", "common_user")
+    common_pool_min: int       = int(os.getenv("COMMON_POOL_MIN", "2"))
+    common_pool_max: int       = int(os.getenv("COMMON_POOL_MAX", "10"))
+    log_level: str             = os.getenv("LOG_LEVEL", "INFO")
+
+
+config = Config()
+```
+
+---
+
+### 4.4 `app/kms_helper.py`
+
+```python
+import base64
+import logging
+import boto3
+from app.config import config
+
+logger = logging.getLogger(__name__)
+
+_kms_client = None
+
+
+def _get_client():
+    global _kms_client
+    if _kms_client is None:
+        _kms_client = boto3.client("kms", region_name=config.aws_region)
+    return _kms_client
+
+
+def decrypt_password(ciphertext_base64: str) -> str:
+    """Decrypt a base64 KMS ciphertext and return the plaintext password."""
+    try:
+        response = _get_client().decrypt(
+            CiphertextBlob=base64.b64decode(ciphertext_base64)
+        )
+        return response["Plaintext"].decode("utf-8")
+    except Exception as exc:
+        logger.error("KMS decryption failed: %s", exc)
+        raise RuntimeError("Failed to decrypt credential") from exc
+```
+
+---
+
+### 4.5 `app/connection_manager.py`
+
+```python
+import threading
+import logging
+import boto3
+import psycopg2
+import psycopg2.pool
+from typing import Dict, Optional
+from app.config import config
+from app.kms_helper import decrypt_password
+
+logger = logging.getLogger(__name__)
+
+
+class ConnectionManager:
+    """
+    Singleton that:
+      - Fetches the common DB password from SSM once at startup.
+      - Maintains a persistent ThreadedConnectionPool to common_db.
+      - Caches decrypted domain credentials in memory after first fetch.
+
+    IMPORTANT: Run uvicorn with --workers 1.
+    Multiple workers = multiple processes = multiple instances = no shared cache.
+    """
+
+    _instance: Optional["ConnectionManager"] = None
+    _class_lock = threading.Lock()
+
+    def __new__(cls) -> "ConnectionManager":
+        if cls._instance is None:
+            with cls._class_lock:
+                if cls._instance is None:
+                    obj = super().__new__(cls)
+                    obj._initialized = False
+                    cls._instance = obj
+        return cls._instance
+
+    # ──────────────────────────────────────────────────────────────
+    # Startup
+    # ──────────────────────────────────────────────────────────────
+
+    def initialize(self) -> None:
+        """Called once during application startup (FastAPI lifespan)."""
+        if self._initialized:
+            return
+
+        with self._class_lock:
+            if self._initialized:
+                return
+
+            logger.info("Initialising ConnectionManager …")
+            common_db_password = self._fetch_ssm_parameter()
+
+            self._common_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=config.common_pool_min,
+                maxconn=config.common_pool_max,
+                host=config.common_db_host,
+                port=config.common_db_port,
+                dbname=config.common_db_name,
+                user=config.common_db_user,
+                password=common_db_password,
+                connect_timeout=5,
+            )
+
+            # { domain_id: {"host":…, "port":…, "db_name":…, "db_user":…, "password":…} }
+            self._credential_cache: Dict[str, dict] = {}
+            self._domain_lock = threading.Lock()
+
+            self._initialized = True
+            logger.info("ConnectionManager ready.")
+
+    def _fetch_ssm_parameter(self) -> str:
+        ssm = boto3.client("ssm", region_name=config.aws_region)
+        response = ssm.get_parameter(
+            Name=config.ssm_parameter_name,
+            WithDecryption=True,
+        )
+        return response["Parameter"]["Value"]
+
+    # ──────────────────────────────────────────────────────────────
+    # Public API
+    # ──────────────────────────────────────────────────────────────
+
+    def get_domain_credentials(self, domain_id: str) -> dict:
+        """
+        Return decrypted credentials for domain_id.
+        First call queries common_db and decrypts via KMS.
+        Subsequent calls return from the in-memory cache.
+        """
+        if domain_id not in self._credential_cache:
+            with self._domain_lock:
+                # Double-checked locking — another thread may have filled it
+                if domain_id not in self._credential_cache:
+                    raw = self._query_common_db(domain_id)
+                    raw["password"] = decrypt_password(raw.pop("password_encrypted"))
+                    self._credential_cache[domain_id] = raw
+                    logger.info("Credentials cached for domain_id=%s", domain_id)
+
+        return self._credential_cache[domain_id]
+
+    def health_check(self) -> bool:
+        try:
+            conn = self._common_pool.getconn()
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            self._common_pool.putconn(conn)
+            return True
+        except Exception as exc:
+            logger.error("Health check failed: %s", exc)
+            return False
+
+    def invalidate_cache(self, domain_id: str) -> None:
+        """Call this if domain credentials are rotated."""
+        with self._domain_lock:
+            self._credential_cache.pop(domain_id, None)
+            logger.info("Cache invalidated for domain_id=%s", domain_id)
+
+    # ──────────────────────────────────────────────────────────────
+    # Internal helpers
+    # ──────────────────────────────────────────────────────────────
+
+    def _query_common_db(self, domain_id: str) -> dict:
+        conn = self._common_pool.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT host, port, db_name, db_user, password_encrypted
+                    FROM   domain_credentials
+                    WHERE  domain_id = %s
+                    """,
+                    (domain_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"No credentials found for domain_id: {domain_id}")
+                return {
+                    "host":               row[0],
+                    "port":               row[1],
+                    "db_name":            row[2],
+                    "db_user":            row[3],
+                    "password_encrypted": row[4],
+                }
+        finally:
+            self._common_pool.putconn(conn)
+```
+
+---
+
+### 4.6 `app/main.py`
+
+```python
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from app.config import config
+from app.connection_manager import ConnectionManager
+
+logging.basicConfig(
+    level=config.log_level,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+manager = ConnectionManager()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    manager.initialize()      # runs once at startup
+    yield
+    # teardown (if needed) goes here
+
+
+app = FastAPI(title="Connection Manager", lifespan=lifespan)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Routes
+# ──────────────────────────────────────────────────────────────────
+
+class CredentialRequest(BaseModel):
+    domain_id: str
+
+
+@app.get("/health")
+def health():
+    if not manager.health_check():
+        raise HTTPException(status_code=503, detail="Common DB unreachable")
+    return {"status": "ok"}
+
+
+@app.post("/v1/credentials")
+def get_credentials(req: CredentialRequest):
+    """
+    Returns decrypted DB credentials for the given domain_id.
+    Credentials are served from in-memory cache after the first call.
+    """
+    try:
+        creds = manager.get_domain_credentials(req.domain_id)
+        return creds
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("Unexpected error for domain_id=%s: %s", req.domain_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.delete("/v1/credentials/{domain_id}/cache")
+def invalidate_cache(domain_id: str):
+    """
+    Force a re-fetch from common DB on next request.
+    Call this after rotating a domain DB password.
+    """
+    manager.invalidate_cache(domain_id)
+    return {"status": "invalidated", "domain_id": domain_id}
+```
+
+---
+
+### 4.7 `app/__init__.py`
+
+```python
+# intentionally empty
+```
+
+---
+
+### 4.8 `.env.example`
+
+```env
+AWS_REGION=us-east-1
+SSM_PARAMETER_NAME=/insightgen/postgres/common-db/password
+COMMON_DB_HOST=postgres
+COMMON_DB_PORT=5432
+COMMON_DB_NAME=common_db
+COMMON_DB_USER=common_user
+COMMON_POOL_MIN=2
+COMMON_POOL_MAX=10
+LOG_LEVEL=INFO
+```
+
+---
+
+### 4.9 `Dockerfile`
+
+```dockerfile
+FROM python:3.12-slim
+
+# Install libpq for psycopg2
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app/ ./app/
+
+EXPOSE 8001
+
+# --workers 1 is mandatory for the singleton to work correctly.
+# Multiple workers = multiple processes = separate memory spaces = no shared cache.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+```
+
+---
+
+### 4.10 Build and Run the Container on EC2
+
+```bash
+# SSH into your EC2 instance
+# Navigate to the project directory
+
+# Build the image
+docker build -t connection-manager:latest .
+
+# Run the container
+# The container joins the same Docker network as PostgreSQL
+# The EC2 IAM role provides AWS credentials automatically — no keys needed
+docker run -d \
+  --name connection-manager \
+  --network app-network \
+  --restart unless-stopped \
+  -p 8001:8001 \
+  -e AWS_REGION=us-east-1 \
+  -e SSM_PARAMETER_NAME=/insightgen/postgres/common-db/password \
+  -e COMMON_DB_HOST=postgres \
+  -e COMMON_DB_PORT=5432 \
+  -e COMMON_DB_NAME=common_db \
+  -e COMMON_DB_USER=common_user \
+  -e LOG_LEVEL=INFO \
+  connection-manager:latest
+
+# Verify startup
+docker logs connection-manager
+
+# Smoke test the health endpoint
+curl http://localhost:8001/health
+# Expected: {"status":"ok"}
+```
+
+---
+
+## Phase 5: Nginx Location Config
+
+Add the following `location` block inside your existing `server {}` block in `/etc/nginx/conf.d/default.conf`:
+
+```nginx
+location /db-proxy/ {
+    # Strip the /db-proxy prefix before forwarding.
+    # The trailing slash on proxy_pass is important — it rewrites the path.
+    proxy_pass          http://127.0.0.1:8001/;
+
+    proxy_http_version  1.1;
+    proxy_set_header    Host              $host;
+    proxy_set_header    X-Real-IP         $remote_addr;
+    proxy_set_header    X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header    X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout    30s;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout    10s;
+
+    # Restrict access to VPC CIDR only.
+    # Adjust the CIDR to match your VPC range.
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 127.0.0.1;
+    deny  all;
+}
+```
+
+After adding the block:
+
+```bash
+# Test the config
+sudo nginx -t
+
+# Reload without dropping connections
+sudo nginx -s reload
+```
+
+**URL mapping after this config:**
+
+| Nginx URL | Forwards to |
+|---|---|
+| `POST /db-proxy/v1/credentials` | `POST http://127.0.0.1:8001/v1/credentials` |
+| `GET /db-proxy/health` | `GET http://127.0.0.1:8001/health` |
+| `DELETE /db-proxy/v1/credentials/{id}/cache` | `DELETE http://127.0.0.1:8001/v1/credentials/{id}/cache` |
+
+---
+
+## Phase 6: Lambda Function (Python 3.12)
+
+### 6.1 Lambda Code — `lambda_function.py`
+
+```python
+"""
+Lambda function that:
+  1. Calls the Connection Manager to get domain DB credentials
+  2. Opens its own psycopg2 connection to the domain DB
+  3. Runs a query and returns results
+
+Requires the psycopg2 Lambda layer to be attached to this function.
+"""
+
+import json
+import logging
+import os
+import urllib.error
+import urllib.request
+
+import psycopg2
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Set in Lambda environment variables
+CONNECTION_MANAGER_URL = os.environ["CONNECTION_MANAGER_URL"]
+# e.g. http://10.132.191.157/db-proxy   (EC2 private IP + nginx path, no trailing slash)
+
+
+def _get_domain_credentials(domain_id: str) -> dict:
+    """Call the Connection Manager service and return decrypted credentials."""
+    url = f"{CONNECTION_MANAGER_URL}/v1/credentials"
+    payload = json.dumps({"domain_id": domain_id}).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode()
+        logger.error("Connection Manager returned %s: %s", exc.code, body)
+        raise RuntimeError(f"Credential fetch failed ({exc.code}): {body}") from exc
+
+
+def lambda_handler(event, context):
+    # domain_id can come from the event body or headers (API Gateway)
+    domain_id = (
+        event.get("domain_id")
+        or (event.get("headers") or {}).get("domain_id")
+        or (event.get("headers") or {}).get("x-domain-id")
+    )
+
+    if not domain_id:
+        return {
+            "statusCode": 400,
+            "body": json.dumps({"error": "domain_id is required"}),
+        }
+
+    try:
+        creds = _get_domain_credentials(domain_id)
+        logger.info("Connecting to domain DB for domain_id=%s", domain_id)
+
+        with psycopg2.connect(
+            host=creds["host"],
+            port=creds["port"],
+            dbname=creds["db_name"],
+            user=creds["db_user"],
+            password=creds["password"],
+            connect_timeout=5,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Replace with your actual query
+                cur.execute(
+                    "SELECT id, data_key, data_value FROM tenant_data LIMIT 10"
+                )
+                rows = cur.fetchall()
+                columns = [desc[0] for desc in cur.description]
+                result = [dict(zip(columns, row)) for row in rows]
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"domain_id": domain_id, "rows": result}),
+        }
+
+    except RuntimeError as exc:
+        return {"statusCode": 502, "body": json.dumps({"error": str(exc)})}
+    except psycopg2.OperationalError as exc:
+        logger.error("Domain DB connection failed: %s", exc)
+        return {"statusCode": 503, "body": json.dumps({"error": "Domain DB unreachable"})}
+    except Exception as exc:
+        logger.error("Unexpected error: %s", exc)
+        return {"statusCode": 500, "body": json.dumps({"error": "Internal error"})}
+```
+
+---
+
+### 6.2 Attach the Existing psycopg2 Lambda Layer
+
+Since you already have a psycopg2 Lambda layer, attach it when creating the function. First, find the layer ARN:
+
+```bash
+# List your existing layers to find the psycopg2 one
+aws lambda list-layers \
+  --region us-east-1 \
+  --query "Layers[*].{Name:LayerName, ARN:LatestMatchingVersion.LayerVersionArn}" \
+  --output table
+```
+
+Package only the function code (no dependencies needed):
+
+```bash
+zip lambda_deployment.zip lambda_function.py
+```
+
+Deploy the function with the layer ARN from the list above:
+
+```bash
+aws lambda create-function \
+  --function-name DomainDBConnector \
+  --runtime python3.12 \
+  --role arn:aws:iam::<ACCOUNT_ID>:role/HCL-User-Role-InsightGen-Lambda \
+  --handler lambda_function.lambda_handler \
+  --zip-file fileb://lambda_deployment.zip \
+  --timeout 30 \
+  --memory-size 256 \
+  --layers arn:aws:lambda:us-east-1:<ACCOUNT_ID>:layer:<YOUR_PSYCOPG2_LAYER_NAME>:<VERSION> \
+  --environment Variables="{CONNECTION_MANAGER_URL=http://10.132.191.157/db-proxy}" \
+  --region us-east-1
+```
+
+---
+
+### 6.3 Lambda VPC Configuration
+
+Lambda must be in the same VPC as the EC2 instance to reach it via private IP:
+
+```bash
+aws lambda update-function-configuration \
+  --function-name DomainDBConnector \
+  --vpc-config SubnetIds=<SUBNET_ID_1>,<SUBNET_ID_2>,SecurityGroupIds=<LAMBDA_SG_ID> \
+  --region us-east-1
+```
+
+**Security group rules required:**
+
+| Resource | Rule type | Port | Source / Destination |
+|---|---|---|---|
+| EC2 security group | Inbound | 80 (nginx) | Lambda security group |
+| EC2 security group | Inbound | 5432 (postgres) | Lambda security group |
+| Lambda security group | Outbound | 80 | EC2 security group |
+| Lambda security group | Outbound | 5432 | EC2 security group |
+
+---
+
+## Phase 7: End-to-End Test
+
+### 7.1 Test the Connection Manager directly from EC2
+
+```bash
+# From the EC2 instance
+curl -s -X POST http://localhost:8001/v1/credentials \
+  -H "Content-Type: application/json" \
+  -d '{"domain_id": "tenant_a"}' | python3 -m json.tool
+
+# Expected:
+# {
+#   "host": "10.132.191.157",
+#   "port": 5432,
+#   "db_name": "domain_db_a",
+#   "db_user": "domain_a_user",
+#   "password": "DomainAPass456!"
+# }
+```
+
+### 7.2 Test through Nginx
+
+```bash
+curl -s -X POST http://localhost/db-proxy/v1/credentials \
+  -H "Content-Type: application/json" \
+  -d '{"domain_id": "tenant_b"}' | python3 -m json.tool
+```
+
+### 7.3 Test the Lambda from the AWS Console
+
+1. Open the [AWS Lambda console](https://console.aws.amazon.com/lambda) and select the `DomainDBConnector` function.
+2. Click the **Test** tab.
+3. Click **Create new event** (or select an existing test event from the dropdown).
+4. Set **Event name** to `TestTenantA`.
+5. Replace the event JSON with:
+
+```json
+{
+  "domain_id": "tenant_a"
+}
+```
+
+6. Click **Save** then click **Test**.
+7. Expand the **Execution result** panel. A successful response looks like:
+
+```json
+{
+  "statusCode": 200,
+  "body": "{\"domain_id\": \"tenant_a\", \"rows\": []}"
+}
+```
+
+8. Repeat with `"domain_id": "tenant_b"` to verify the second domain.
+
+**Reading the logs:** Scroll down to the **Log output** section in the Execution result panel. If the connection fails, the error from psycopg2 or the Connection Manager will appear there. You can also open **CloudWatch → Log groups → /aws/lambda/DomainDBConnector** for the full log stream.
+
+---
+
+## Security Notes
+
+| Risk | Mitigation applied |
+|---|---|
+| Common DB password in plain text | Stored only in SSM SecureString, encrypted with KMS CMK. Fetched in memory at startup, never written to disk. |
+| Domain DB passwords in common DB | Stored as KMS ciphertext. Plain text only exists in process memory after decryption. |
+| Credential endpoint reachable only from VPC | Nginx `deny all` outside VPC CIDRs blocks any access from outside the private network. |
+| Lambda returning credentials over wire | All traffic is internal VPC. Add TLS on nginx (`ssl_certificate`) for defence in depth. |
+| KMS key misuse | Key policy `HCL-USER-KEY-insightgen-postgres-credentials` restricts decrypt to EC2 instance profile and Lambda role only. EC2 has two scoped statements: one via SSM (for the SSM parameter), one direct (for DB table ciphertexts). |
+| Credential cache stale after password rotation | Call `DELETE /v1/credentials/{domain_id}/cache` to force a fresh fetch. |
+| Multiple uvicorn workers breaking singleton | Dockerfile hard-codes `--workers 1`. Document this constraint clearly for anyone modifying the Dockerfile. |
