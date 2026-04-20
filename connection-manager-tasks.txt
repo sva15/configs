@@ -1,0 +1,122 @@
+Task 1 — Designed and Documented the Architecture for Centrally Managing Multi-Tenant Database Credentials Using a Common Database and AWS KMS Encryption
+
+Analysed the requirement: multiple tenant domain databases exist on the platform, each with separate credentials, and services need a single secure place to resolve the right credentials at runtime based on a domain_id rather than hardcoding or distributing secrets across services
+Designed a layered architecture: Lambda function → Nginx reverse proxy → Connection Manager service → Common DB → Domain DBs, with AWS Parameter Store and KMS as the security layer
+Decided to use a Singleton-pattern service deployed as a persistent Docker container on EC2 rather than a stateless function, so that the in-memory credential cache survives across requests and eliminates repeated KMS calls for the same domain
+Evaluated AWS Secrets Manager vs SSM Parameter Store for storing the common DB password — chose Parameter Store because the credential is static and rarely rotates, making it the simpler and cheaper option
+Decided to store domain database passwords as KMS ciphertext blobs directly inside the common database table rather than in SSM, because SSM is not designed for a dynamically growing set of N tenant credentials
+Prepared a comprehensive internal implementation guide covering all setup phases and an architecture Word document for team knowledge sharing
+
+
+Task 2 — Verified the Existing KMS Customer Managed Key and Updated Its Key Policy to Grant the EC2 Instance Profile Decrypt Access for Both SSM and Direct Database Operations
+
+Verified the existing KMS Customer Managed Key (HCL-USER-KEY-insightgen-postgres-credentials) is enabled and accessible in us-east-1 before any work began
+Reviewed the existing key policy which uses a shared SSO role with aws:userid session-level conditions to restrict decrypt access to a specific named user — understood this pattern is specific to how reserved roles work in this AWS account
+Added two new IAM statements to the key policy for the EC2 instance profile HCL-User-Role-InsightGen-EC2:
+
+First statement allows decrypt when the call goes through the SSM service — covers the container startup step when it fetches the common DB password from Parameter Store
+Second statement allows direct decrypt without a service condition — covers the runtime step when the container decrypts domain passwords retrieved from the common database table
+
+
+Documented in the architecture guide why two separate statements are required: the SSM fetch is mediated by the SSM service so the kms:ViaService condition applies, but decrypting ciphertext from the database is a direct API call with no service context — a single ViaService-only statement would silently fail for the second operation
+Documented clearly in the guide where future teams should add new service roles and new user sessions to this policy
+
+
+Task 3 — Attached a Least-Privilege SSM Read Policy to the EC2 Instance Profile and Confirmed the Lambda Role Has VPC Execution Permissions
+
+Attached an inline IAM policy ConnectionManagerSSMAccess to the existing EC2 role HCL-User-Role-InsightGen-EC2, granting ssm:GetParameter on only the specific parameter path used by the connection manager service — scoped to a single ARN with no wildcards or write permissions
+Confirmed that no separate KMS IAM statement is needed on the EC2 role because the KMS key policy already explicitly grants the instance profile what it needs — documented this reasoning so future team members understand why the IAM policy looks incomplete on its own
+Verified the existing Lambda role HCL-User-Role-InsightGen-Lambda has AWSLambdaVPCAccessExecutionRole attached, which is required for Lambda to create network interfaces inside the VPC and reach the EC2 private IP
+
+
+Task 4 — Decided Against Reusing the Existing ifrs_user Master Password and Created a Dedicated common_user Credential with Minimal Database Permissions
+
+Evaluated whether the existing SSM parameter /insightgen/postgres/password (the ifrs_user master credential) could be reused for the connection manager to avoid creating a new parameter
+Decided against it for two reasons: ifrs_user is a PostgreSQL superuser, so using it in an application connection would give full access to every database on the instance if the service were ever compromised; and rotating the master password would break all other services that depend on it
+Created a dedicated common_user PostgreSQL role with SELECT permission on only the domain_credentials table — the narrowest possible access for what the service actually needs
+Stored the common_user password as a new SSM SecureString at /insightgen/postgres/common-db/password — this path falls under the existing /insightgen/postgres/* KMS policy wildcard so no additional policy changes were required
+Documented the full SSM parameter tree in the guide so the team can see at a glance which parameters exist, which are existing and must not be touched, and which one belongs to the connection manager
+
+
+Task 5 — Provisioned Three PostgreSQL Databases with Isolated Users, Tables, and Grants Inside the Existing PostgreSQL Container
+
+Connected to the existing PostgreSQL container (postgres_db) using ifrs_user as the superuser
+Created three application-level users — common_user, domain_a_user, domain_b_user — each with isolated passwords that would later be encrypted with KMS
+Created three databases — common_db, domain_db_a, domain_db_b — each owned by its respective user
+Created the domain_credentials table in common_db with a password_encrypted column to hold KMS ciphertext; granted SELECT only on this table to common_user
+Created tenant_data tables in both domain_db_a and domain_db_b; granted full privileges on each table to its respective domain user
+Inserted 4 sample test records per tenant domain (company name, fiscal year, currency, reporting date) to enable end-to-end validation through Lambda
+
+
+Task 6 — Encrypted Domain Database Passwords Using the KMS CLI and Stored the Ciphertext Values Directly into the Common Database Credential Registry
+
+Ran aws kms encrypt from a workstation using the admin SSO session to encrypt the domain_a_user and domain_b_user passwords against key alias HCL-USER-KEY-insightgen-postgres-credentials
+Used fileb:// to pass plaintext from a temporary file to avoid passwords appearing in shell history; deleted temp files immediately after capturing the base64 ciphertext output; cleared shell history
+Inserted both ciphertext blobs into the domain_credentials table with host=10.132.191.157 (the EC2 private IP that Lambda will use to reach the domain databases), and the correct db_name and db_user per tenant
+Verified insertion using a SELECT with LEFT(password_encrypted, 20) || '...' to confirm rows exist without printing full ciphertexts to the terminal
+
+
+Task 7 — Stored the Common DB Application User Password in a New Dedicated SSM Parameter Under the Existing Credential Path Hierarchy
+
+Created a new SecureString parameter at /insightgen/postgres/common-db/password in us-east-1, encrypted with the existing KMS key alias
+Verified the parameter is stored and decryptable by running aws ssm get-parameter --with-decryption and confirming the value is readable
+Cleared shell history after the operation to ensure the plaintext password does not persist on disk anywhere
+
+
+Task 8 — Deployed the Connection Manager Service as a Docker Container on EC2, Configured It Against the EC2 Private IP, and Verified Startup Against the Common Database
+
+Built the Docker image on the EC2 instance and ran the container on the shared Docker network (app-network) with --restart unless-stopped so it recovers automatically if the host reboots
+Set COMMON_DB_HOST=10.132.191.157 (the EC2 private IP) as an environment variable — this is necessary because the container needs to reach PostgreSQL via the host network interface, not by container name
+Verified the container startup logs confirmed the SSM parameter was fetched, the common DB connection pool was established, and the service was ready to accept requests
+Smoke-tested the health endpoint (curl http://localhost:8001/health) to confirm the service is running and connected to the common DB before adding nginx routing
+
+
+Task 9 — Configured the Nginx Location Block to Route Traffic from the /db-proxy/ Path to the Connection Manager Container
+
+Added a /db-proxy/ location block to the existing nginx configuration, with proxy_pass targeting the EC2 private IP on port 8001, proxy_read_timeout 30s, and allow/deny rules restricting access to RFC-1918 private address ranges only
+Validated the nginx configuration with docker exec nginx nginx -t and reloaded with docker exec nginx nginx -s reload without dropping active connections
+
+
+Task 10 — Deployed the Lambda Function Using the Existing psycopg2 Layer, Configured It with the Connection Manager URL, and Placed It Inside the VPC
+
+Packaged only the Lambda handler file into a deployment zip — the psycopg2 dependency is provided by the existing Lambda layer, so no packaging of native libraries was required
+Located the existing psycopg2 Lambda layer ARN using aws lambda list-layers and attached it at function creation time
+Deployed the function with runtime python3.12, role HCL-User-Role-InsightGen-Lambda, 30-second timeout, 256MB memory, and environment variable CONNECTION_MANAGER_URL=http://10.132.191.157/db-proxy
+Configured the Lambda function inside the same VPC as EC2 using aws lambda update-function-configuration --vpc-config
+
+
+Task 11 — Performed End-to-End Testing of the Complete Flow from Lambda Console Through nginx, Connection Manager, Common DB, KMS Decryption, and Domain DB Data Retrieval
+
+Tested the Connection Manager directly on EC2 with curl http://localhost:8001/v1/credentials — confirmed 200 response with correct decrypted credentials for both tenant_a and tenant_b
+Tested through the nginx proxy with curl http://localhost/db-proxy/v1/credentials — confirmed 200 response after the proxy was correctly configured
+Tested the Lambda function from the AWS Console Test tab with event {"domain_id": "tenant_a"} — confirmed 200 response with 4 rows from domain_db_a (Acme Corp data)
+Tested with event {"domain_id": "tenant_b"} — confirmed 200 response with 4 rows from domain_db_b (Globex Ltd data)
+Confirmed in container logs that the first request per domain showed a cache MISS (common DB queried, KMS called) and all subsequent requests showed a cache HIT (returned instantly from memory with no DB or KMS calls)
+
+
+Task 12 — Issue Faced: psql Could Not Connect to PostgreSQL Container Using Only the Username — Resolved by Identifying the Correct Default Database
+
+Attempted to connect using docker exec -it postgres_db psql -U ifrs_user — received error: FATAL: database "ifrs_user" does not exist
+Root cause: PostgreSQL was started with POSTGRES_USER=ifrs_user and POSTGRES_DB=ifrs_dev — when no -d flag is provided, psql attempts to connect to a database named after the user (ifrs_user), which does not exist; the actual default database is ifrs_dev
+Also identified that the container name is postgres_db, not postgres as originally assumed
+Resolution: all psql commands updated to docker exec -it postgres_db psql -U ifrs_user -d ifrs_dev; further database switching done using \c database_name within a single session rather than exiting and re-execing for each database
+Updated the implementation guide to reflect both corrections throughout all Phase 2 commands
+
+
+Task 13 — Issue Faced: nginx Returned 502 Bad Gateway When Proxy Was Configured with 127.0.0.1 — Resolved by Changing proxy_pass to the EC2 Private IP
+
+After adding the /db-proxy/ nginx location block with proxy_pass http://127.0.0.1:8001/, requests through nginx returned a 502 Bad Gateway while direct calls to the container on localhost:8001 worked correctly
+Investigated the nginx error log and found: connect() failed (111: Connection refused) while connecting to upstream: http://127.0.0.1:8001/
+Root cause: nginx runs as its own Docker container — inside that container, 127.0.0.1 is the nginx container's own loopback address, not the EC2 host's. Port 8001 is not listening inside the nginx container so the connection is always refused
+Resolution: changed proxy_pass to http://10.132.191.157:8001/ — traffic exits the nginx container, reaches the EC2 host's network interface, and Docker's -p 8001:8001 port mapping forwards it to the connection manager container
+Reloaded nginx with docker exec nginx nginx -s reload and confirmed the 502 was resolved
+Updated the implementation guide with a prominent note explaining this networking behaviour so the team understands why 127.0.0.1 must never be used in proxy_pass when nginx is containerised; also updated all nginx management commands in the guide from sudo nginx to docker exec nginx nginx
+
+
+Task 14 — Issue Faced: Lambda Returned 502 and EC2 Could Not Be Reached via Private IP — Resolved by Adding Inbound Port 80 to the EC2 Security Group
+
+Lambda function invocation returned 502 with an HTML nginx error page in the response body — the same 502 that was seen locally was also the root cause for Lambda failures
+Identified that testing with the EC2 private IP (10.132.191.157) failed while localhost worked — this pointed to a security group issue because localhost traffic never leaves the machine and bypasses security group evaluation, while Lambda traffic enters the EC2 network interface and is subject to security group rules
+Root cause: the EC2 security group had no inbound rule permitting traffic on port 80 from within the VPC CIDR — Lambda could not reach nginx even though it was in the same VPC
+Resolution: once the nginx proxy_pass fix (Task 13) and the security group inbound rule for port 80 from the VPC CIDR were both applied, both the private IP test from EC2 and the Lambda invocation started returning 200 successfully
+Confirmed in Lambda CloudWatch logs that the full end-to-end flow — credential fetch, KMS decrypt, domain DB connection, and data retrieval — completed successfully after these two fixes
